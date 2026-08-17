@@ -1,0 +1,88 @@
+{
+  "kind": "Listing",
+  "data": {
+    "after": "t3_page2",
+    "children": [
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1abcde",
+          "name": "t3_1abcde",
+          "title": "AITA for telling my roommate to move out after months of unpaid rent?",
+          "selftext": "My roommate stopped paying rent about four months ago, and I let it slide because they said work had dried up. I covered the shortfall out of my savings and told myself it was temporary.\n\nThen last week I came home early and found a brand new console in the living room. I asked where the money came from and they said \"it was a gift\" without looking up. I was furious. We argued for an hour and I said things I regret.\n\nEventually they admitted they had been spending the rent money for months. I told them they had until the end of the month to move out. Now their family calls me every day telling me I ruined everything. Check my [previous post](https://example.com/old) for context. **Am I the asshole here?**",
+          "author": "throwaway_rent99",
+          "subreddit": "AmItheAsshole",
+          "permalink": "/r/AmItheAsshole/comments/1abcde/aita_for_telling_my_roommate_to_move_out/",
+          "created_utc": 1785600000.0,
+          "score": 8421,
+          "num_comments": 1934,
+          "upvote_ratio": 0.93,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "locked": false,
+          "is_self": true,
+          "link_flair_text": "Not the A-hole",
+          "removed_by_category": null
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1removd",
+          "name": "t3_1removd",
+          "title": "This post was removed",
+          "selftext": "[removed]",
+          "author": "[deleted]",
+          "subreddit": "AmItheAsshole",
+          "permalink": "/r/AmItheAsshole/comments/1removd/this_post_was_removed/",
+          "created_utc": 1785600100.0,
+          "score": 500,
+          "num_comments": 12,
+          "over_18": false,
+          "stickied": false,
+          "is_self": true,
+          "removed_by_category": "moderator"
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1linkpo",
+          "name": "t3_1linkpo",
+          "title": "Look at this chart",
+          "selftext": "",
+          "author": "chartfan",
+          "subreddit": "AmItheAsshole",
+          "permalink": "/r/AmItheAsshole/comments/1linkpo/look_at_this_chart/",
+          "created_utc": 1785600200.0,
+          "score": 3000,
+          "num_comments": 40,
+          "over_18": false,
+          "stickied": false,
+          "is_self": false,
+          "removed_by_category": null
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1sticky",
+          "name": "t3_1sticky",
+          "title": "Monthly meta thread",
+          "selftext": "Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. Please read the rules before posting. ",
+          "author": "AutoModerator",
+          "subreddit": "AmItheAsshole",
+          "permalink": "/r/AmItheAsshole/comments/1sticky/monthly_meta_thread/",
+          "created_utc": 1785500000.0,
+          "score": 900,
+          "num_comments": 300,
+          "over_18": false,
+          "stickied": true,
+          "is_self": true,
+          "removed_by_category": null
+        }
+      }
+    ]
+  }
+}

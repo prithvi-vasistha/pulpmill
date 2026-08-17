@@ -1,0 +1,22 @@
+{
+  "posts": [
+    {
+      "no": 42825148,
+      "sub": "Lost two hours on a road I have driven a hundred times",
+      "com": "<a href=\"#p42825148\" class=\"quotelink\">&gt;&gt;42825148</a><br>Something genuinely strange happened to me last winter and I still cannot explain it.<br><br>I was driving back from my sister&#039;s place around 2am on a road I have taken a hundred times. <span class=\"quote\">&gt;be me, half asleep, radio off</span><br>About twenty minutes in the road just... stopped matching my memory. The turns were in the wrong order. I pulled over and checked my phone and the GPS showed me sitting in the middle of a field.<br><br>I sat there for what felt like ten minutes. When I looked up the road was normal again and my clock had jumped forward two hours. I have never driven that route at night since and I am not sure I ever will again.",
+      "name": "Anonymous",
+      "time": 1785600000,
+      "replies": 87,
+      "images": 4,
+      "resto": 0,
+      "semantic_url": "lost-two-hours-on-a-road"
+    },
+    {
+      "no": 42825200,
+      "com": "bump",
+      "name": "Anonymous",
+      "time": 1785600900,
+      "resto": 42825148
+    }
+  ]
+}

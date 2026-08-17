@@ -1,0 +1,50 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+token.json
+cookies.txt
+
+# --- Local, machine-specific configuration overrides ---
+config/pipeline.local.yaml
+config/*.local.yaml
+
+# --- Runtime data (database, logs, artifacts) ---
+var/
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Media assets provided later (gameplay footage, watermarks, banners) ---
+assets/gameplay/
+assets/**/*.mp4
+assets/**/*.mkv
+assets/**/*.webm
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store

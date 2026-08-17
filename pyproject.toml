@@ -1,0 +1,101 @@
+[project]
+name = "pulpmill"
+version = "0.1.0"
+description = "Local-first story discovery, deduplication and ranking engine for short-form content pipelines."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "httpx>=0.28",
+    "pydantic>=2.9",
+    "pyyaml>=6.0.2",
+    "structlog>=24.4",
+    "typer>=0.15",
+    "rich>=13.9",
+]
+
+[project.optional-dependencies]
+# Editorial selection via the Claude API. Entirely optional: the pipeline runs
+# without it and falls back to deterministic ordering.
+claude = ["anthropic>=0.40"]
+
+[project.scripts]
+pulpmill = "pulpmill.cli.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pulpmill"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # comprehensions
+    "UP",   # pyupgrade
+    "ARG",  # unused arguments
+    "SIM",  # simplify
+    "TID",  # tidy imports
+    "PTH",  # prefer pathlib
+    "RUF",
+    "BLE",  # blind except
+    "T20",  # no print() outside the CLI presentation layer
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "SIM108", # ternaries are not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The CLI is the presentation layer; rich/typer output is its whole job.
+"src/pulpmill/cli/*" = ["T20"]
+"scripts/*" = ["T20"]
+# Tests legitimately look different: mock transport handlers must accept a
+# `request` they ignore, and test doubles share mutable class-level state.
+"tests/*" = ["ARG001", "ARG002", "ARG005", "RUF012", "T20"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "network: test requires live network access (deselected by default)",
+]
+filterwarnings = ["error"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["pulpmill"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["anthropic.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src/pulpmill"]
+branch = true
