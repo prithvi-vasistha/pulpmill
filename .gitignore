@@ -48,3 +48,10 @@ assets/**/*.webm
 .vscode/
 *.swp
 .DS_Store
+
+# Render assets: the media is local and often large; the READMEs explaining
+# what belongs there are tracked.
+assets/backgrounds/*
+!assets/backgrounds/README.md
+assets/branding/*
+!assets/branding/README.md

@@ -286,6 +286,165 @@ models, so it needs headroom beyond the size of the JSON expected back.
 
 ---
 
+## `script`
+
+How a story becomes a narration script.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `provider` | `deterministic` | `claude` adds hook and pacing advice, with fallback |
+| `version` | `2026.08.1` | Bump when script behaviour changes; stored on every script |
+| `words_per_minute` | `150.0` | Must track the real rate of the configured voice |
+| `target_seconds` | `55.0` | Aimed-for length of one part |
+| `min_seconds` | `15.0` | Shorter than this and the story is refused |
+| `max_seconds` | `170.0` | Hard ceiling; under the 3-minute platform limit |
+| `max_parts` | `6` | A story needing more is **rejected, not truncated** |
+| `include_hook` / `include_outro` | `true` | Framing lines the pipeline writes |
+| `outro_template` | `"Part {next_part} is up next."` | `{next_part}`, `{total_parts}` |
+| `final_outro` | `"Follow for more stories like this."` | Used on the last part |
+
+**`target_seconds` decides how many videos you get from a story.** At 55s, an
+800-word story becomes roughly six parts; at 90s it becomes four longer ones.
+Both are defensible — more parts means more uploads, fewer parts means better
+completion rates. The setting does exactly what it says, so choose deliberately.
+
+**Rejection is intentional.** If a story cannot fit in `max_parts` even at
+`max_seconds` per part, the script stage moves it to `REJECTED` rather than
+publishing a series that never finishes. Raise `max_parts` or `max_seconds` if
+you would rather have it.
+
+---
+
+## `tts`
+
+| Setting | Default | Notes |
+|---|---|---|
+| `provider` | `kokoro` | `mock` writes silence of the right length, for testing |
+| `voice` | `af_heart` | Prefix encodes accent and gender: `a`/`b`, `f`/`m` |
+| `speed` | `1.0` | Playback rate multiplier |
+| `language` | `en-us` | espeak-ng code. **Must carry a region** — bare `en` is rejected |
+| `sample_rate` | `24000` | Kokoro's native rate |
+| `cache_dir` | `var/audio` | Clips and assembled tracks, keyed by content |
+| `sentence_gap_seconds` | `0.28` | Silence inserted between sentences |
+| `paragraph_gap_seconds` | `0.45` | Longer pause at a paragraph break |
+| `max_clip_seconds` | `300.0` | Refuses an implausibly long clip from a looping model |
+| `kokoro.model_path` | `var/models/kokoro-v1.0.onnx` | ONNX backend only |
+| `kokoro.voices_path` | `var/models/voices-v1.0.bin` | ONNX backend only |
+| `kokoro.device` | `auto` | `cuda` is available to the PyTorch backend |
+
+Weights are not vendored. Run `./scripts/fetch-tts-model.sh` once.
+
+The gaps are not only cosmetic: caption grouping treats a pause as a hard break,
+so shortening them below ~0.18s makes captions run sentences together.
+
+---
+
+## `captions`
+
+Colours are ASS `&HAABBGGRR` strings — **alpha, blue, green, red**. That byte
+order is the format's, not a typo.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `enabled` | `true` | |
+| `font_family` | `DejaVu Sans` | Must be installed and findable by libass |
+| `font_size` | `72` | See the sizing note below |
+| `primary_colour` | `&H00FFFFFF` | White |
+| `highlight_colour` | `&H0000D7FF` | Amber, in BGR |
+| `outline_width` | `5.0` | Heavy outline; captions sit over moving footage |
+| `karaoke` | `true` | Highlights the word being spoken |
+| `max_words_per_cue` | `4` | |
+| `max_chars_per_cue` | `22` | See the sizing note below |
+| `min_cue_seconds` | `0.4` | Shorter cues merge into their neighbour |
+| `vertical_position` | `0.62` | Fraction of frame height, from the top |
+| `horizontal_margin` | `0.08` | Kept clear of platform UI on both sides |
+
+**Sizing:** `font_size` and `max_chars_per_cue` are a pair. 1080px less two 8%
+margins is ~908px of usable width, and bold DejaVu Sans averages ~0.55em per
+character — so 22 characters at 72px is about 870px. Raise either without
+recomputing that and cues wrap to two lines.
+
+---
+
+## `render`
+
+| Setting | Default | Notes |
+|---|---|---|
+| `width` / `height` | `1080` / `1920` | Must be portrait and even |
+| `fps` | `30` | |
+| `encoder` | `auto` | Probes ffmpeg once; prefers NVENC, falls back to libx264 |
+| `quality` | `23` | `-cq` for NVENC, `-crf` for x264 |
+| `max_bitrate` | `5M` | Empty disables the cap. See below |
+| `loudness_lufs` | `-14.0` | What the platforms normalise to anyway |
+| `output_dir` | `var/video` | |
+| `timeout_seconds` | `900.0` | A render exceeding this is killed |
+
+**`max_bitrate` matters more than it looks.** Constant quality alone produces
+6+ Mbps on animated gradients with grain — well past the point of visible
+improvement, and it makes every upload slower.
+
+### `render.background`
+
+| Setting | Default | Notes |
+|---|---|---|
+| `mode` | `auto` | `library` when clips exist, `procedural` when they do not |
+| `library_dir` | `assets/backgrounds` | Drop `.mp4` files here |
+| `min_clip_seconds` | `20.0` | Shorter clips loop too visibly |
+| `randomise_start` | `true` | Deterministic per story, so renders reproduce |
+| `procedural.top_colour` / `.bottom_colour` | `#141726` / `#2b1035` | Gradient |
+| `procedural.grain` | `0.06` | Stops large flat gradients banding |
+
+`auto` is what makes "no footage yet" a working state. Add clips and the next
+render uses them, with no configuration change.
+
+### `render.watermark`
+
+Ships **disabled**. Enabling it without the file present is a hard error at
+render time, never a silently skipped overlay — a batch published without
+branding is not something to discover afterwards.
+
+---
+
+## `validation`
+
+The gate that stops a bad batch reaching a platform. Defaults are strict.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `min_seconds` / `max_seconds` | `12.0` / `179.0` | 179s is publishable everywhere |
+| `max_bytes` | 300 MiB | |
+| `require_audio` | `true` | |
+| `min_mean_volume_dbfs` | `-45.0` | A silent track is usually a muxing mistake |
+| `require_expected_dimensions` | `true` | Must match `render.width`/`height` |
+| `duration_tolerance_seconds` | `1.5` | Rendered length vs narration length |
+
+`min_mean_volume_dbfs` is what catches the worst failure mode: a video that
+looks completely fine and has no narration. The mock TTS provider writes
+silence, so a video made with it fails here — deliberately.
+
+---
+
+## `publishing`
+
+| Setting | Default | Notes |
+|---|---|---|
+| `dry_run` | `true` | **Global interlock.** Builds and records; transmits nothing |
+| `attribution_template` | `"Source: {url}"` | Appended to every description |
+| `targets.<name>.enabled` | `false` | Every target ships disabled |
+| `targets.<name>.privacy` | `private` | A public default plus a bug is unrecoverable |
+| `targets.<name>.daily_limit` | varies | Local cap, independent of the platform's |
+| `targets.<name>.hashtags` | varies | Normalised, de-duplicated, first one joins the title |
+| `targets.<name>.options` | `{}` | Adapter-owned, validated by the adapter |
+
+`publish` is a dry run unless given `--live`, and a dry run needs no credentials
+at all — the whole path is testable before any platform approval exists.
+
+YouTube's `daily_limit` defaults to 6 because that is what the default API quota
+allows: `videos.insert` costs 1600 of 10,000 units per day. Raising the number
+here does not raise the quota. See [docs/PUBLISHING.md](docs/PUBLISHING.md).
+
+---
+
 ## `sources`
 
 Each source has a core section the pipeline understands and an adapter-owned
@@ -320,6 +479,28 @@ engine drops the axis rather than scoring it zero. That is why
 `quality_overrides` is looked up by whatever the adapter records as the story's
 `quality_key` — subreddit for Reddit, board for 4chan, `@handle` for X. The
 ranking signal performs a dictionary lookup and never learns what a subreddit is.
+
+### `blocked_quality_keys`
+
+Communities a source must never ingest, matched against the story's
+`quality_key` metadata — the subreddit for Reddit, the board for 4chan. One
+mechanism, no adapter branching, and case-insensitive because Reddit treats
+`r/NoSleep` and `r/nosleep` as the same subreddit.
+
+```yaml
+sources:
+  reddit:
+    blocked_quality_keys:
+      - nosleep       # original fiction; authors retain and enforce rights
+      - LetsNotMeet   # first-person accounts of real, identifiable people
+```
+
+Enforced by the core **before a story is persisted**, so it holds even if a
+blocked community is left in `queries`. Editing this does not touch stories
+already stored — run `pulpmill policy --apply` for that, which is a deliberate
+second step rather than a side effect of editing YAML.
+
+Reasoning for each entry is in [docs/CONTENT_POLICY.md](docs/CONTENT_POLICY.md).
 
 ### Per-source specifics
 

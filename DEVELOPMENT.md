@@ -62,15 +62,25 @@ only the socket is replaced.
 records sleeps instead of performing them. Rate-limiting and backoff tests
 assert on exact schedules and finish instantly.
 
-**Determinism is asserted, not assumed.** Ranking, deduplication and candidate
-ordering all have explicit "same input ⇒ same output" tests.
+**Determinism is asserted, not assumed.** Ranking, deduplication, candidate
+ordering, script building, background selection and word timing all have
+explicit "same input ⇒ same output" tests.
+
+**One local tool is allowed.** The render tests invoke the real ffmpeg — it is a
+tool, not a network service, and mocking it would test nothing worth testing.
+They skip cleanly when it is absent, so the rest of the suite runs anywhere.
+
+**Speech synthesis runs through the mock provider.** It writes real WAV files of
+the correct length, which is exactly what the timing, caption and muxing logic
+needs. It also writes *silence*, which is why the validation test asserts that a
+mock-narrated video is refused — the gate catching its own worst failure mode.
 
 ### Layout
 
 | Path | Covers |
 |---|---|
-| `tests/unit/` | Pure logic: normalization, hashing, config, state machine, ranking signals, retry/rate limiting, editorial validation, series planning, TTS |
-| `tests/integration/` | Real SQLite and real adapter code: persistence, migrations, dedup, adapters, HTTP client, pipeline, editorial service, CLI |
+| `tests/unit/` | Pure logic: normalization, hashing, config, state machine, ranking signals, retry/rate limiting, editorial validation, series planning, speech shaping, segmentation, captions, alignment, publishing metadata, content policy |
+| `tests/integration/` | Real SQLite, real adapter code and real ffmpeg: persistence, migrations, dedup, adapters, HTTP client, pipeline, editorial service, production stages, publishing, CLI |
 | `tests/fixtures/` | Recorded API payloads |
 | `tests/support/` | Deterministic doubles |
 | `tests/conftest.py` | Shared fixtures |
@@ -204,13 +214,50 @@ src/pulpmill/
   deduplication/              layered strategies + engine
   ranking/                    signals + scoring engine
   editorial/                  optional AI selection
+  scripting/                  segmentation, speech shaping, hooks
+  tts/                        speech providers, alignment, track assembly
+  captions/                   cue grouping + ASS generation
+  rendering/                  backgrounds, ffmpeg, compositor
+  validation/                 publishability checks
+  publishing/                 registry + platform adapters
   persistence/                database, migrations, repositories
-  pipeline/                   wiring, runner, reports
-  tts/                        TTS interface + mock
+  pipeline/                   wiring, runners, reports
   cli/                        commands + rendering
+assets/backgrounds/           gameplay footage (git-ignored, empty by default)
+assets/branding/              watermark and banner assets
+scripts/                      quality gate, TTS model download
 tests/                        unit, integration, fixtures, support
-var/                          runtime data — database and logs (git-ignored)
+var/                          runtime data — db, logs, audio, video, models (git-ignored)
 ```
+
+---
+
+## Working on production stages
+
+The stages have very different costs, which is why each is a separate command.
+
+```bash
+uv run pulpmill script                     # seconds
+uv run pulpmill narrate --provider mock    # instant; writes silence
+uv run pulpmill narrate                    # ~2x realtime on CPU
+uv run pulpmill render --limit 1           # ~20s per minute of video with NVENC
+uv run pulpmill validate
+```
+
+Iterating on caption styling does **not** require re-narrating: audio is cached
+by content, so `render --force` reuses the tracks. Iterating on the hook does
+not require re-synthesising the body: clips are cached per line.
+
+To inspect what a render actually produced:
+
+```bash
+ffmpeg -ss 12 -i var/video/<script-id>.mp4 -frames:v 1 /tmp/frame.png
+ffmpeg -i var/video/<script-id>.mp4 -af volumedetect -f null -   # audio sanity
+cat var/render/<script-id>.ass                                   # the captions
+```
+
+The `.ass` file is the fastest way to debug caption timing — it is plain text
+with real timestamps, and libass renders exactly what it says.
 
 ---
 

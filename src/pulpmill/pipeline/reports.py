@@ -23,6 +23,10 @@ class SourceReport:
     #: Valid records that are simply not usable as narration (too short,
     #: removed, link-only). Not errors.
     filtered: int = 0
+    #: Subset of `filtered` refused by content policy rather than by an
+    #: adapter's own filters. Counted separately: "we chose not to ingest this"
+    #: and "this did not meet the quality bar" are different facts.
+    blocked: int = 0
     new: int = 0
     #: Already-held posts that were refreshed rather than re-added.
     known: int = 0
@@ -41,6 +45,7 @@ class SourceReport:
             "detail": self.detail,
             "fetched": self.fetched,
             "filtered": self.filtered,
+            "blocked": self.blocked,
             "normalized": self.normalized,
             "new": self.new,
             "known": self.known,
@@ -76,6 +81,10 @@ class IngestReport:
         return sum(report.filtered for report in self.sources.values())
 
     @property
+    def blocked(self) -> int:
+        return sum(report.blocked for report in self.sources.values())
+
+    @property
     def failures(self) -> int:
         return sum(report.failures for report in self.sources.values())
 
@@ -91,6 +100,7 @@ class IngestReport:
             "known": self.known,
             "duplicates": self.duplicates,
             "filtered": self.filtered,
+            "blocked": self.blocked,
             "failures": self.failures,
             "sources": {name: report.as_dict() for name, report in self.sources.items()},
         }

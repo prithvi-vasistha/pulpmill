@@ -22,7 +22,15 @@ from pulpmill.persistence.database import Database
 from pulpmill.persistence.migrations import MigrationRunner, MigrationStatus, default_migrations_dir
 from pulpmill.persistence.repositories.editorial import EditorialRepository
 from pulpmill.persistence.repositories.jobs import FailureRepository, JobRepository
+from pulpmill.persistence.repositories.media import (
+    AudioRepository,
+    ValidationRepository,
+    VideoRepository,
+)
+from pulpmill.persistence.repositories.publications import PublicationRepository
 from pulpmill.persistence.repositories.rankings import RankingRepository
+from pulpmill.persistence.repositories.scripts import ScriptRepository
+from pulpmill.persistence.repositories.series import SeriesRepository
 from pulpmill.persistence.repositories.stories import StoryRepository
 from pulpmill.ranking.engine import RankingEngine
 
@@ -55,6 +63,12 @@ class Application:
         self.jobs = JobRepository(self.database, clock)
         self.failures = FailureRepository(self.database, clock)
         self.editorial = EditorialRepository(self.database, clock)
+        self.series = SeriesRepository(self.database, clock)
+        self.scripts = ScriptRepository(self.database, clock)
+        self.audio = AudioRepository(self.database, config.project_root, clock)
+        self.videos = VideoRepository(self.database, config.project_root, clock)
+        self.validations = ValidationRepository(self.database, clock)
+        self.publications = PublicationRepository(self.database, clock)
 
         self.deduplication = DeduplicationEngine(config.deduplication, self.stories)
         self.ranking = RankingEngine(config)

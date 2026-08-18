@@ -233,9 +233,19 @@ class TestNarrativeSuitabilitySignal:
 
 class TestSourceQualitySignal:
     def test_the_override_for_a_community_is_applied(self, config, make_story) -> None:
-        story = make_story(quality_key="nosleep")
+        """Reads the override from config rather than pinning a number.
+
+        The shipped weights are tuning, and tuning changes. What must hold is
+        that the override is found and beats the platform baseline.
+        """
+        reddit = config.sources["reddit"]
+        community, expected = next(iter(reddit.quality_overrides.items()))
+
+        story = make_story(quality_key=community)
         result = SourceQualitySignal().score(context(config, story))
-        assert result.value == 1.0
+
+        assert result.value == expected
+        assert result.value != reddit.quality
         assert result.detail["override_applied"] is True
 
     def test_an_unlisted_community_falls_back_to_the_platform_baseline(

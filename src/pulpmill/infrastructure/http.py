@@ -117,10 +117,15 @@ class HttpClient:
         headers: Mapping[str, str] | None = None,
         data: Mapping[str, Any] | None = None,
         json_body: Any | None = None,
+        content: bytes | None = None,
         auth: tuple[str, str] | None = None,
         expected_status: tuple[int, ...] = (200,),
     ) -> httpx.Response:
         """Perform a request, retrying per policy.
+
+        `content` sends a raw body, which is what resumable media uploads need.
+        It is deliberately `bytes` rather than a file handle: a retry has to be
+        able to send the same body again, and a consumed stream cannot.
 
         Raises `SourceRequestError` when the attempt budget is exhausted or the
         status is not retryable and not expected.
@@ -141,6 +146,7 @@ class HttpClient:
                     headers=dict(headers) if headers else None,
                     data=data,
                     json=json_body,
+                    content=content,
                     auth=auth,
                 )
             except _TRANSIENT_EXCEPTIONS as exc:

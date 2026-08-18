@@ -10,12 +10,24 @@ from rich.table import Table
 
 from pulpmill.cli import render
 from pulpmill.cli.context import get_context
-from pulpmill.domain.enums import StoryStatus
+from pulpmill.domain.enums import JobStatus, PipelineStage, StoryStatus
+from pulpmill.domain.errors import InvalidStateTransitionError
 from pulpmill.editorial.service import EditorialSelector, build_provider
-from pulpmill.ingestion.base import RAW_FORMAT_KEY, build_story
+from pulpmill.ingestion.base import QUALITY_KEY, RAW_FORMAT_KEY, build_story
 from pulpmill.normalization.text import clean_text
 from pulpmill.pipeline.reports import IngestReport, RankReport
 from pulpmill.pipeline.runner import PipelineRunner
+
+#: Statuses the content-policy sweep will examine. Excludes stories already set
+#: aside, and everything past SELECTED -- a story that has been rendered needs a
+#: deliberate decision about its artifacts, not a bulk status change.
+_POLICY_REVIEWABLE = (
+    StoryStatus.DISCOVERED,
+    StoryStatus.NORMALIZED,
+    StoryStatus.DEDUPLICATED,
+    StoryStatus.RANKED,
+    StoryStatus.SELECTED,
+)
 
 #: Statuses `renormalize` will rewrite. Everything the pipeline still owns.
 _RENORMALIZABLE = (
@@ -46,7 +58,7 @@ JsonOption = Annotated[bool, typer.Option("--json", help="Emit machine-readable 
 def _render_ingest(report: IngestReport) -> None:
     table = Table(title="Ingestion", title_justify="left", header_style="bold", expand=False)
     table.add_column("source")
-    for column in ("fetched", "new", "known", "duplicates", "filtered", "failures"):
+    for column in ("fetched", "new", "known", "duplicates", "filtered", "blocked", "failures"):
         table.add_column(column, justify="right")
     table.add_column("status")
 
@@ -59,6 +71,7 @@ def _render_ingest(report: IngestReport) -> None:
             f"{source.known:,}",
             f"{source.duplicates:,}",
             f"{source.filtered:,}",
+            f"{source.blocked:,}",
             f"{source.failures:,}",
             status,
         )
@@ -195,6 +208,73 @@ def register(app: typer.Typer) -> None:
             },
             title="Deduplication sweep",
         )
+
+    @app.command()
+    def policy(
+        ctx: typer.Context,
+        apply: Annotated[
+            bool,
+            typer.Option("--apply", help="Reject the stories found. Without this, only reports."),
+        ] = False,
+    ) -> None:
+        """Check stored stories against the content policy blocklist.
+
+        Editing `blocked_quality_keys` stops new stories being ingested; it does
+        not touch what is already stored. This is the deliberate second step --
+        rejecting stored data is a decision, not a side effect of editing YAML.
+
+        Stories are moved to REJECTED, never deleted, so the change stays
+        auditable and reversible. See docs/CONTENT_POLICY.md.
+        """
+        cli = get_context(ctx)
+        app_ctx = cli.app()
+
+        blocked: list[tuple[str, str, str]] = []
+        for story in app_ctx.stories.iter_by_status(_POLICY_REVIEWABLE):
+            source = app_ctx.config.source(story.source_platform)
+            if source is None:
+                continue
+            community = story.metadata.get(QUALITY_KEY)
+            key = str(community) if community is not None else None
+            if source.is_blocked(key):
+                blocked.append((story.id, key or "-", story.title))
+
+        if not blocked:
+            render.ok("No stored stories come from a blocked community.")
+            return
+
+        table = Table(
+            title=f"Blocked by content policy ({len(blocked)})",
+            title_justify="left",
+            header_style="bold",
+        )
+        table.add_column("story id", width=10, style="dim")
+        table.add_column("community")
+        table.add_column("title", overflow="fold")
+        for story_id, community, title in blocked[:40]:
+            table.add_row(story_id[:8], community, title[:70])
+        render.console.print(table)
+
+        if not apply:
+            render.warn(f"{len(blocked)} stories would be rejected. Re-run with --apply.")
+            return
+
+        job_id = app_ctx.jobs.start("policy", {"blocked": len(blocked)})
+        rejected = 0
+        for story_id, community, _ in blocked:
+            try:
+                app_ctx.stories.transition(
+                    story_id,
+                    StoryStatus.REJECTED,
+                    stage=PipelineStage.DEDUPLICATE,
+                    job_id=job_id,
+                    reason=f"content policy: {community} is blocked",
+                )
+                rejected += 1
+            except InvalidStateTransitionError as exc:
+                render.warn(f"{story_id[:8]}: {exc}")
+        app_ctx.jobs.finish(job_id, status=JobStatus.SUCCEEDED, stats={"rejected": rejected})
+        render.ok(f"Rejected {rejected} stories. They are set aside, not deleted.")
 
     @app.command()
     def renormalize(

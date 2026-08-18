@@ -18,6 +18,11 @@ dependencies = [
 # Editorial selection via the Claude API. Entirely optional: the pipeline runs
 # without it and falls back to deterministic ordering.
 claude = ["anthropic>=0.40"]
+# Local speech synthesis. Optional because it is ~200 MB of packages plus
+# ~340 MB of model weights downloaded separately, and the pipeline installs and
+# runs without it. The ONNX backend is the cheaper of Kokoro's two
+# distributions; the reference `kokoro` package (PyTorch, ~2.5 GB) also works.
+tts = ["kokoro-onnx>=0.4"]
 
 [project.scripts]
 pulpmill = "pulpmill.cli.app:main"
@@ -91,6 +96,13 @@ mypy_path = "src"
 strict = true
 warn_unreachable = true
 disallow_untyped_decorators = false
+
+# Neither Kokoro distribution ships type stubs, and both are optional imports
+# resolved at runtime. Everything crossing back out of them is typed at the
+# boundary in tts/kokoro.py.
+[[tool.mypy.overrides]]
+module = ["kokoro.*", "kokoro_onnx.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["anthropic.*"]

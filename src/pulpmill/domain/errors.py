@@ -123,3 +123,91 @@ class EditorialProviderUnavailableError(EditorialError):
 
 class EditorialResponseError(EditorialError):
     """The editorial provider returned output that failed validation."""
+
+
+# --- Production --------------------------------------------------------------
+
+
+class ScriptError(PulpmillError):
+    """Base class for script-generation failures."""
+
+
+class ScriptProviderUnavailableError(ScriptError):
+    """The configured script provider cannot run (no API key, missing package)."""
+
+
+class ScriptResponseError(ScriptError):
+    """A script provider returned advice that failed validation."""
+
+
+class StoryTooLongError(ScriptError):
+    """A story needs more parts than the configuration permits.
+
+    Not a bug and not a transient failure: the story is set aside rather than
+    published as a series nobody finishes.
+    """
+
+
+class SynthesisError(PulpmillError):
+    """Base class for text-to-speech failures."""
+
+
+class TTSUnavailableError(SynthesisError):
+    """No usable speech provider -- model weights missing, or an unknown voice."""
+
+
+class RenderError(PulpmillError):
+    """Base class for video composition failures."""
+
+
+class AssetError(RenderError):
+    """A required render asset is missing, unreadable, or unusable."""
+
+
+class FFmpegError(RenderError):
+    """An ffmpeg or ffprobe invocation failed.
+
+    Carries the tail of stderr rather than the whole stream: ffmpeg is verbose
+    and the diagnosis is always in the last few lines, but the full output would
+    swamp a log record.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: str | None = None,
+        returncode: int | None = None,
+        stderr_tail: str | None = None,
+        **context: Any,
+    ) -> None:
+        super().__init__(
+            message,
+            command=command,
+            returncode=returncode,
+            stderr_tail=stderr_tail,
+            **context,
+        )
+        self.command = command
+        self.returncode = returncode
+        self.stderr_tail = stderr_tail
+
+
+class VideoValidationError(PulpmillError):
+    """A rendered file failed one or more publishability checks."""
+
+    def __init__(self, message: str, *, failures: tuple[str, ...] = (), **context: Any) -> None:
+        super().__init__(message, failures=", ".join(failures) or None, **context)
+        self.failures = failures
+
+
+class PublishError(PulpmillError):
+    """Base class for publishing failures."""
+
+
+class PublisherUnavailableError(PublishError):
+    """A publishing target cannot run -- disabled, unauthenticated, unapproved."""
+
+
+class PublishRejectedError(PublishError):
+    """A platform accepted the request and refused the content."""

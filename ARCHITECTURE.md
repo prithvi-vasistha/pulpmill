@@ -12,14 +12,16 @@ which is what lets the ranking engine be tested without a database and the
 database be swapped without touching the model.
 
 ```
-                      cli/            ← presentation only
-                        │
-                    pipeline/         ← composition root + stage runner
-        ┌───────────────┼───────────────┬──────────────┐
-        │               │               │              │
-   ingestion/      deduplication/   ranking/      editorial/
-        │               │               │              │
-        └───────────────┴───────┬───────┴──────────────┘
+                              cli/                  ← presentation only
+                               │
+                           pipeline/                ← composition root + runners
+     ┌──────────┬──────────┬────┼─────┬──────────┬───────────┬────────────┐
+     │          │          │          │          │           │            │
+ingestion/ deduplication/ ranking/ editorial/ scripting/    tts/      publishing/
+     │          │          │          │          │           │            │
+     │          │          │          │          │      captions/   rendering/
+     │          │          │          │          │           │       validation/
+     └──────────┴──────────┴────┬─────┴──────────┴───────────┴────────────┘
                                 │
                    normalization/  persistence/
                                 │
@@ -38,9 +40,14 @@ database be swapped without touching the model.
 | `deduplication/` | Layered strategies and the engine that applies them |
 | `ranking/` | Signals and the weighted scoring engine |
 | `editorial/` | Optional AI selection behind a provider interface |
+| `scripting/` | Segmentation, speech shaping, hooks, optional AI pacing advice |
+| `tts/` | Speech provider interface, Kokoro backends, alignment, track assembly |
+| `captions/` | Cue grouping and ASS subtitle generation |
+| `rendering/` | Background providers, ffmpeg process layer, video compositor |
+| `validation/` | Publishability checks measured against the rendered file |
+| `publishing/` | Publisher registry, per-platform adapters, metadata |
 | `persistence/` | SQLite connection, migrations, repositories |
-| `pipeline/` | Application wiring, stage runner, reports |
-| `tts/` | TTS provider interface + working mock (for the narration stage) |
+| `pipeline/` | Application wiring, stage runners, reports |
 | `cli/` | Typer commands and rich rendering |
 
 ---
@@ -60,7 +67,24 @@ database be swapped without touching the model.
                                            ▼
                                     ┌────────────┐   ┌──────────────┐
                                     │    rank    ├──▶│ top candidates│
-                                    └────────────┘   └──────────────┘
+                                    └────────────┘   └──────┬───────┘
+                                                            ▼
+                                                     ┌────────────┐
+                                                     │   select   │  ← editorial
+                                                     └─────┬──────┘
+                                                           ▼
+ ┌──────────┐  NarrationScript  ┌──────────┐ AudioArtifact ┌──────────┐
+ │  script  ├──────────────────▶│ narrate  ├──────────────▶│  render  │
+ └──────────┘   + StoryParts    └──────────┘  + timings    └────┬─────┘
+  segmentation   speech shaping   per-sentence TTS               │ VideoArtifact
+  + hooks        + part numbers   + concatenation                ▼
+                                                          ┌────────────┐
+                                                          │  validate  │
+                                                          └─────┬──────┘
+                                                                ▼
+                                                          ┌────────────┐
+                                                          │  publish   │
+                                                          └────────────┘
 ```
 
 Two properties shape the whole design:
@@ -249,11 +273,21 @@ buy nothing at this scale. WAL mode gives concurrent readers, which is all
 | `story_rankings` | Unique on `(story_id, ranking_version, config_fingerprint)` |
 | `jobs` / `job_failures` | Run records and persisted failures |
 | `editorial_batches` / `editorial_selections` | Selection results and ordering |
-| `story_series` / `story_parts` | Multi-part video support (schema ready, unused) |
+| `story_series` / `story_parts` | Multi-part video structure and offsets |
+| `story_scripts` | Narration text. Unique on `(story_id, part_number)` |
+| `audio_artifacts` | Synthesised tracks with word timings. Unique on `script_id` |
+| `video_artifacts` | Rendered files. Unique on `script_id` |
+| `video_validations` | Append-only publishability verdicts |
+| `publications` | One attempt per platform. Unique on `(video_id, target)` |
 
 Indexes cover `(source_platform, source_id)`, `url_fingerprint`, `content_hash`,
-`status`, `final_score`, `created_at`, `discovered_at`, `series_id` and the LSH
-band lookup.
+`status`, `final_score`, `created_at`, `discovered_at`, `series_id`,
+`config_fingerprint`, `(target, published_at)` and the LSH band lookup.
+
+Every production table carries `story_id` alongside its immediate parent. That
+is redundant normalisation on purpose: it makes the chain from a published video
+back to its source URL one join instead of four, and makes an orphaned row
+impossible to create.
 
 Idempotency is enforced by the schema, not by convention: the UNIQUE constraints
 above are what make re-scraping and re-ranking no-ops rather than duplicate rows.
@@ -297,35 +331,101 @@ stranded state fails the build.
 
 ---
 
-## Where the remaining stages attach
+## Production
 
-Tonight's slice ends at ranking. The rest attaches without rewriting it:
+Discovery ends at `SELECTED`. Production takes it to a validated file on disk.
 
-| Stage | Attachment point | Already in place |
-|---|---|---|
-| Editorial selection | `EditorialProvider` | ✅ implemented, optional |
-| Script generation | New stage reading `SELECTED` stories | `SCRIPT_PENDING`/`SCRIPT_READY` states |
-| Series splitting | `domain/series.plan_parts` | ✅ implemented + `story_parts` table |
-| TTS | `TTSProvider` | ✅ interface + working mock + cache-key design |
-| Subtitle timing | `SpeechResult.word_timings` | ✅ in the model |
-| Gameplay assets | New module | — |
-| FFmpeg rendering | New module | FFmpeg 8.1 with nvenc verified on this machine |
-| Publishing | New module | `PUBLISHED` state |
+### Script
 
-Two rules the later stages inherit:
+`scripting/`. A story becomes one or more narration scripts. Three things happen
+that are easy to conflate and are kept separate on purpose:
 
-- **Provenance travels with the artifact.** `StoryPart` carries `Provenance`
-  explicitly, so a part that has been through script generation, TTS and
-  rendering still knows its source URL.
-- **The pipeline computes part numbers, not a model.** `plan_parts` takes cut
-  points and assigns `part_number`/`total_parts`; a model may propose *where* to
-  cut, never that a story is "Part 2 of 4".
+**Segmentation** cuts a long story into parts. `plan_segments` proposes ranges;
+`domain.series.plan_parts` turns them into numbered parts. Neither consults a
+model.
 
-`KokoroProvider` is not stubbed. There is no audio stage to feed yet, and a stub
-pretending to synthesise audio would be worse than an honest absence.
-`MockTTSProvider` is real and testable — it writes a valid WAV of the estimated
-duration with evenly-distributed word timings, which is enough to build the
-subtitle and composition stages against.
+**Speech shaping** rewrites text that a synthesiser reads wrong. `ScriptLine`
+carries both `text` (what captions display) and `speech_text` (what is narrated),
+which is what lets a caption show `$1,250` while the narrator says "one thousand
+two hundred fifty dollars". This is not cosmetic: the expansion changes duration
+by up to 40%, so **planning is done on the spoken form**. Planning on the written
+form produced parts that reliably overran.
+
+**Framing** adds a hook and an outro, neither of which exists in the source.
+
+A provider may *advise* — a better hook, better cut points — and its advice is
+validated against the actual sentence list and discarded whole if anything is out
+of range. A story that cannot be told within `max_parts` is **rejected, not
+truncated**: publishing six parts of a seventeen-part story strands the viewer.
+
+### Narrate
+
+`tts/`. One clip per sentence, then concatenation.
+
+That ordering is the whole trick. Sentence boundaries come from *measured* clip
+lengths, so they are exact; only the distribution of words inside a sentence is
+estimated (by character weight plus a punctuation pause bonus). The alternative —
+one long clip subdivided arithmetically — drifts visibly over a minute of video.
+The usual fix is a second model for forced alignment; this costs no extra
+dependency and is deterministic. `ForcedAligner` is left as a seam for the day
+word-level precision matters more than it does now.
+
+Kokoro-82M runs locally behind `TTSProvider`, with both the ONNX and PyTorch
+distributions supported. Neither is a hard dependency. Two levels of content-keyed
+caching mean a re-scripted story re-synthesises only the lines that changed.
+
+### Render
+
+`captions/` + `rendering/`. One ffmpeg invocation per video:
+
+```
+background → scale to cover → crop to frame → fps → grain
+           → burn in captions (ASS) → watermark overlay
+```
+
+Captions are burned in because no short-form platform displays soft subtitles.
+Word highlighting is one ASS event per word — the format's own karaoke mode
+colours every *already-spoken* word, which is the wrong look.
+
+**Nothing scraped reaches a command line.** Caption and title text travel in an
+ASS file, and `{`, `}` and `\` are escaped out of it, so a story body containing
+`{\an8}` cannot reposition the captions.
+
+The background comes from a `BackgroundProvider`. In `auto` mode it uses the clip
+library when it holds usable footage and a generated animated gradient when it
+does not — which is what makes "everything except the gameplay footage" a
+working state rather than a broken one. Clip and start offset are chosen by
+`blake2b` of the story id, so renders reproduce and consecutive videos do not
+open on the same frame.
+
+### Validate
+
+`validation/`. Measured against the file with ffprobe and ffmpeg, not against
+the pipeline's beliefs about the file — the failures worth catching are exactly
+the ones where every stage reported success. Duration, dimensions, file size,
+audio presence, mean volume, clipping. Every check records its measured value
+whether it passed or failed.
+
+### Publish
+
+`publishing/`. Same registry shape as the source adapters. Detail in
+[docs/PUBLISHING.md](docs/PUBLISHING.md); the load-bearing parts:
+
+- A video with no passing validation row is refused.
+- `UNIQUE (video_id, target)` makes a retry an update, not a second upload.
+- The attempt row is written *before* anything is transmitted.
+- `dry_run` defaults to on, needs no credentials, and transmits nothing.
+
+### Rules the production stages inherit
+
+- **Provenance travels with the artifact.** Every script, audio track and video
+  carries `Provenance`, so a rendered file knows its source URL without a
+  database round trip.
+- **The pipeline computes part numbers, not a model.** A model may propose where
+  to cut; it may not decide that a story is "Part 2 of 4".
+- **Stages advance whole stories.** A three-part story reaches `AUDIO_READY`
+  only when all three parts have audio. Advancing per part would let a
+  half-rendered story look ready to publish.
 
 ---
 

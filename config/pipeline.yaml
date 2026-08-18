@@ -177,6 +177,173 @@ editorial:
     # used" so it can steer away from repeating topics.
     recent_selection_hours: 72.0
 
+script:
+  # deterministic = pure local segmentation and phrasing. No AI, always works.
+  # claude        = optional pass that rewrites the hook and proposes cut
+  #                 points; falls back to deterministic on ANY failure.
+  provider: deterministic
+  # Bump when script-building behaviour changes. Stored on every script.
+  version: "2026.08.1"
+  # Keep close to the real rate of the configured voice, or parts drift long.
+  words_per_minute: 150.0
+  target_seconds: 55.0
+  min_seconds: 15.0
+  # Under the three-minute ceiling shared by Shorts, Reels and TikTok.
+  max_seconds: 170.0
+  max_parts: 6
+  include_hook: true
+  include_outro: true
+  outro_template: "Part {next_part} is up next."
+  final_outro: "Follow for more stories like this."
+  claude:
+    model: claude-opus-5
+    max_output_tokens: 4000
+    timeout_seconds: 60.0
+    max_attempts: 2
+
+tts:
+  # kokoro = local Kokoro-82M, offline, no API cost.
+  # mock   = deterministic silence with even word timings, for tests and for
+  #          exercising the render stage without a model.
+  provider: kokoro
+  voice: af_heart
+  speed: 1.0
+  # espeak-ng code. Must carry a region: bare 'en' is rejected upstream.
+  language: en-us
+  sample_rate: 24000
+  cache_dir: var/audio
+  kokoro:
+    repo_id: hexgrad/Kokoro-82M
+    # kokoro-onnx does not ship or download weights. Point these at
+    # kokoro-v1.0.onnx and voices-v1.0.bin to use the ONNX backend; leave them
+    # empty to use the PyTorch backend, which resolves its own from repo_id.
+    model_path: var/models/kokoro-v1.0.onnx
+    voices_path: var/models/voices-v1.0.bin
+    device: auto
+  sentence_gap_seconds: 0.28
+  paragraph_gap_seconds: 0.45
+  max_clip_seconds: 300.0
+
+captions:
+  enabled: true
+  # Colours are ASS &HAABBGGRR -- alpha, blue, green, red. That order is the
+  # format's, not a mistake.
+  font_family: DejaVu Sans
+  font_size: 72
+  bold: true
+  primary_colour: "&H00FFFFFF"
+  highlight_colour: "&H0000D7FF" # amber, in BGR
+  outline_colour: "&H00000000"
+  outline_width: 5.0
+  shadow_depth: 2.0
+  karaoke: true
+  max_words_per_cue: 4
+  # Sized so a cue fits one line at font_size 72 within the side margins.
+  max_chars_per_cue: 22
+  min_cue_seconds: 0.4
+  vertical_position: 0.62
+  horizontal_margin: 0.08
+
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  # auto probes ffmpeg once and prefers NVENC when the build supports it.
+  encoder: auto
+  quality: 23
+  preset: p5 # NVENC preset
+  libx264_preset: medium
+  # Constant quality alone produces 6+ Mbps on grainy gradients, well past
+  # the point of visible improvement. Empty string disables the cap.
+  max_bitrate: 5M
+  audio_bitrate: 192k
+  # What the platforms normalise to anyway; hitting it avoids surprises.
+  loudness_lufs: -14.0
+  output_dir: var/video
+  timeout_seconds: 900.0
+  background:
+    # auto uses the clip library when it holds usable footage and the
+    # procedural generator when it does not. Drop files into library_dir and
+    # the pipeline switches over on the next render -- no config change.
+    mode: auto
+    library_dir: assets/backgrounds
+    extensions: [".mp4", ".mov", ".mkv", ".webm"]
+    min_clip_seconds: 20.0
+    randomise_start: true
+    procedural:
+      top_colour: "#141726"
+      bottom_colour: "#2b1035"
+      grain: 0.06
+  watermark:
+    # Off until an asset exists. Enabling this without the file present is a
+    # hard error at render time, never a silently skipped overlay.
+    enabled: false
+    path: assets/branding/watermark.png
+    position: top-right
+    scale: 0.18
+    opacity: 0.75
+    margin_ratio: 0.04
+  title_card:
+    enabled: true
+    seconds: 2.6
+    font_size: 58
+    max_chars: 90
+    vertical_position: 0.30
+
+validation:
+  min_seconds: 12.0
+  # One render that is publishable everywhere.
+  max_seconds: 179.0
+  max_bytes: 314572800 # 300 MiB
+  require_audio: true
+  min_mean_volume_dbfs: -45.0
+  require_expected_dimensions: true
+  duration_tolerance_seconds: 1.5
+
+publishing:
+  # Global interlock. While true, adapters validate and build the upload but
+  # never transmit. Turning this off is a deliberate act -- see docs/PUBLISHING.md.
+  dry_run: true
+  attribution_template: "Source: {url}"
+  targets:
+    youtube:
+      # Every target ships disabled. Each needs credentials AND a platform
+      # approval step that cannot be automated.
+      enabled: false
+      adapter: youtube
+      privacy: private
+      # The binding constraint is not this number: videos.insert costs 1600 of
+      # a default 10,000 daily quota units, so ~6 uploads/day until Google
+      # grants an increase.
+      daily_limit: 6
+      title_max_chars: 100
+      description_max_chars: 4900
+      hashtags: ["#shorts", "#storytime", "#scarystories"]
+      options:
+        category_id: "24" # Entertainment
+        made_for_kids: false
+    instagram:
+      enabled: false
+      adapter: instagram
+      privacy: private
+      daily_limit: 25
+      title_max_chars: 90
+      description_max_chars: 2100
+      hashtags: ["#reels", "#storytime", "#scarystories"]
+      options:
+        # Meta fetches the file from a URL rather than accepting an upload, so
+        # publishing requires the rendered video to be reachable over HTTPS.
+        public_base_url: ""
+    tiktok:
+      enabled: false
+      adapter: tiktok
+      privacy: private
+      daily_limit: 10
+      title_max_chars: 90
+      description_max_chars: 2100
+      hashtags: ["#storytime", "#scarystories"]
+      options: {}
+
 sources:
   reddit:
     enabled: true
@@ -189,16 +356,21 @@ sources:
     quality: 0.80
     # Keyed by the story's `quality_key` metadata, which the Reddit adapter
     # sets to the subreddit name.
+    # Communities this source must never ingest, keyed by the story's
+    # quality_key metadata (the subreddit, for Reddit). Enforced by the core
+    # before a story is persisted, independently of `queries` -- see
+    # docs/CONTENT_POLICY.md for the reasoning behind each entry.
+    blocked_quality_keys:
+      - nosleep # original fiction; authors retain and enforce rights
+      - LetsNotMeet # first-person accounts of real, identifiable people
     quality_overrides:
-      nosleep: 1.00
       AmItheAsshole: 0.95
-      LetsNotMeet: 0.95
-      TrueOffMyChest: 0.90
-      confession: 0.88
+      TrueOffMyChest: 0.92
+      confession: 0.90
+      MaliciousCompliance: 0.88
       relationship_advice: 0.85
-      MaliciousCompliance: 0.85
+      pettyrevenge: 0.82
       TalesFromRetail: 0.80
-      pettyrevenge: 0.80
     engagement:
       score_reference: 4000.0
       comment_reference: 300.0
@@ -215,10 +387,6 @@ sources:
       oauth_token_url: https://www.reddit.com/api/v1/access_token
       permalink_base_url: https://www.reddit.com
     queries:
-      - subreddit: nosleep
-        listing: top
-        time_filter: week
-        limit: 50
       - subreddit: AmItheAsshole
         listing: top
         time_filter: day
@@ -230,10 +398,14 @@ sources:
       - subreddit: confession
         listing: top
         time_filter: week
-        limit: 25
-      - subreddit: LetsNotMeet
+        limit: 50
+      - subreddit: MaliciousCompliance
         listing: top
-        time_filter: month
+        time_filter: week
+        limit: 25
+      - subreddit: pettyrevenge
+        listing: top
+        time_filter: week
         limit: 25
 
   fourchan:

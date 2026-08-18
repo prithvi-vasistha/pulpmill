@@ -41,17 +41,33 @@ class TestMigrations:
             "editorial_selections",
             "story_series",
             "story_parts",
+            "story_scripts",
+            "audio_artifacts",
+            "video_artifacts",
+            "video_validations",
+            "publications",
             "schema_migrations",
         } <= tables
         db.close()
 
     def test_upgrade_is_idempotent(self, config: AppConfig) -> None:
+        """Asserted against what is on disk, not a hard-coded list.
+
+        Pinning the exact migration names here would mean every new migration
+        breaks a test that has nothing to do with it.
+        """
+        directory = default_migrations_dir(config.project_root)
+        expected = [migration.label for migration in discover_migrations(directory)]
+        assert expected, "no migrations were discovered"
+
         db = Database(config.database_path, config.runtime.database)
-        runner = MigrationRunner(db, default_migrations_dir(config.project_root))
-        assert runner.upgrade() == ["0001_initial"]
-        assert runner.upgrade() == []
-        assert runner.status().is_current
-        db.close()
+        try:
+            runner = MigrationRunner(db, directory)
+            assert runner.upgrade() == expected
+            assert runner.upgrade() == []
+            assert runner.status().is_current
+        finally:
+            db.close()
 
     def test_an_edited_applied_migration_is_refused(
         self, config: AppConfig, tmp_path: Path

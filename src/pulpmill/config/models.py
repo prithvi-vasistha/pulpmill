@@ -304,12 +304,279 @@ class EditorialConfig(StrictModel):
         return self
 
 
-# --- sources -----------------------------------------------------------------
-
-
 class RateLimitConfig(StrictModel):
     requests_per_second: PositiveFloat = 1.0
     burst: PositiveInt = 1
+
+
+# --- production ---------------------------------------------------------------
+
+
+class ClaudeScriptConfig(StrictModel):
+    model: str = "claude-opus-5"
+    max_output_tokens: PositiveInt = 4000
+    timeout_seconds: PositiveFloat = 60.0
+    max_attempts: PositiveInt = 2
+
+
+class ScriptConfig(StrictModel):
+    """How a story becomes a narration script.
+
+    Durations are the contract with the rest of production: segmentation aims
+    for `target_seconds` per part and never exceeds `max_seconds`, which is what
+    keeps a rendered video inside the platform ceilings enforced later by
+    `validation`.
+    """
+
+    provider: Literal["deterministic", "claude"] = "deterministic"
+    #: Bump when script-building behaviour changes. Stored on every script.
+    version: str = "2026.08.1"
+    #: Narration rate used to convert words to seconds before any audio exists.
+    #: Must stay close to the TTS voice's real rate or parts drift long.
+    words_per_minute: PositiveFloat = 150.0
+    target_seconds: PositiveFloat = 55.0
+    min_seconds: PositiveFloat = 15.0
+    max_seconds: PositiveFloat = 170.0
+    #: A story needing more parts than this is rejected rather than split into
+    #: a series nobody will finish watching.
+    max_parts: PositiveInt = 6
+    include_hook: bool = True
+    include_outro: bool = True
+    #: `{next_part}` and `{total_parts}` are substituted. Used on every part
+    #: except the last.
+    outro_template: str = "Part {next_part} is up next."
+    final_outro: str = "Follow for more stories like this."
+    claude: ClaudeScriptConfig = ClaudeScriptConfig()
+
+    @model_validator(mode="after")
+    def _durations_ordered(self) -> ScriptConfig:
+        if not self.min_seconds < self.target_seconds <= self.max_seconds:
+            raise ValueError(
+                "script durations must satisfy min_seconds < target_seconds <= max_seconds"
+            )
+        return self
+
+
+class KokoroConfig(StrictModel):
+    """Kokoro-82M specifics.
+
+    `repo_id` and `model_path` are alternatives: leave `model_path` empty to let
+    the package resolve its own weights, or point it at a local ONNX file for a
+    fully offline install.
+    """
+
+    repo_id: str = "hexgrad/Kokoro-82M"
+    model_path: str = ""
+    voices_path: str = ""
+    #: Kokoro is a 82M-parameter model; it fits comfortably on a 6 GB card, but
+    #: CPU synthesis is viable and is the safe default on a shared machine.
+    device: Literal["auto", "cuda", "cpu"] = "auto"
+
+
+class TTSConfig(StrictModel):
+    provider: Literal["mock", "kokoro"] = "kokoro"
+    voice: str = "af_heart"
+    speed: PositiveFloat = 1.0
+    #: espeak-ng language code. Must include a region.
+    language: str = "en-us"
+    sample_rate: PositiveInt = 24000
+    #: Synthesised clips are cached by a key covering text, voice, speed and
+    #: model version, so re-rendering a video costs no synthesis.
+    cache_dir: str = "var/audio"
+    #: Silence inserted between sentences, which is also what makes sentence
+    #: boundaries audible enough for captions to feel aligned.
+    kokoro: KokoroConfig = KokoroConfig()
+    sentence_gap_seconds: NonNegativeFloat = 0.28
+    paragraph_gap_seconds: NonNegativeFloat = 0.45
+    #: Fail a synthesis whose measured duration exceeds this. Guards against a
+    #: model looping on malformed input and producing a 20-minute clip.
+    max_clip_seconds: PositiveFloat = 300.0
+
+
+class CaptionConfig(StrictModel):
+    """Burned-in caption styling and cue grouping.
+
+    Colours are ASS `&HAABBGGRR` strings -- alpha first, then blue, green, red.
+    That byte order is the format's, not a typo.
+    """
+
+    enabled: bool = True
+    font_family: str = "DejaVu Sans"
+    font_size: PositiveInt = 72
+    bold: bool = True
+    primary_colour: str = "&H00FFFFFF"
+    highlight_colour: str = "&H0000D7FF"
+    outline_colour: str = "&H00000000"
+    outline_width: NonNegativeFloat = 5.0
+    shadow_depth: NonNegativeFloat = 2.0
+    #: Word-by-word highlighting as the narrator speaks. Requires word timings;
+    #: falls back to whole-cue display when the provider cannot supply them.
+    karaoke: bool = True
+    max_words_per_cue: PositiveInt = 4
+    #: Sized against the usable width: 1080px less two 8% margins is ~908px,
+    #: and bold DejaVu Sans averages ~0.55em per character, so 22 characters at
+    #: 72px is about 870px. Raising either this or `font_size` without
+    #: recomputing that produces cues that wrap to two lines.
+    max_chars_per_cue: PositiveInt = 22
+    min_cue_seconds: PositiveFloat = 0.4
+    #: Vertical placement as a fraction of frame height, measured from the top.
+    vertical_position: UnitFloat = 0.62
+    #: Horizontal margin as a fraction of frame width, kept clear of platform
+    #: UI overlays on both sides.
+    horizontal_margin: UnitFloat = 0.08
+
+
+class ProceduralBackgroundConfig(StrictModel):
+    """The generated background used until real footage is available.
+
+    Not a placeholder: it renders a real, deterministic animated gradient, so
+    the whole pipeline is runnable and testable before any asset exists.
+    """
+
+    #: `#rrggbb`. Two colours define the gradient; the seed picks a rotation.
+    top_colour: str = "#141726"
+    bottom_colour: str = "#2b1035"
+    #: Subtle film grain, which stops large flat gradients from banding.
+    grain: UnitFloat = 0.06
+
+
+class BackgroundConfig(StrictModel):
+    """Where the moving background behind the captions comes from.
+
+    `auto` uses the clip library when it contains usable footage and the
+    procedural generator when it does not, which is what lets the pipeline run
+    end to end today and switch over the moment footage is dropped in.
+    """
+
+    mode: Literal["auto", "library", "procedural"] = "auto"
+    library_dir: str = "assets/backgrounds"
+    #: Extensions scanned in the library directory.
+    extensions: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".webm")
+    #: Clips shorter than this cannot fill a part without an obvious loop.
+    min_clip_seconds: PositiveFloat = 20.0
+    #: Start the clip at a deterministic offset derived from the story id, so
+    #: consecutive videos using the same footage do not open on the same frame.
+    randomise_start: bool = True
+    procedural: ProceduralBackgroundConfig = ProceduralBackgroundConfig()
+
+
+class WatermarkConfig(StrictModel):
+    #: Off until an asset exists. Enabling it without `path` present is a
+    #: configuration error raised at render time, not a silently skipped
+    #: overlay.
+    enabled: bool = False
+    path: str = "assets/branding/watermark.png"
+    position: Literal["top-left", "top-right", "bottom-left", "bottom-right"] = "top-right"
+    #: Width as a fraction of frame width.
+    scale: UnitFloat = 0.18
+    opacity: UnitFloat = 0.75
+    margin_ratio: UnitFloat = 0.04
+
+
+class TitleCardConfig(StrictModel):
+    """The opening title, drawn over the background for the first few seconds."""
+
+    enabled: bool = True
+    seconds: PositiveFloat = 2.6
+    font_size: PositiveInt = 58
+    max_chars: PositiveInt = 90
+    #: Fraction of frame height, measured from the top. Kept well clear of the
+    #: caption band so the two never collide on a long title.
+    vertical_position: UnitFloat = 0.30
+
+
+class RenderConfig(StrictModel):
+    width: PositiveInt = 1080
+    height: PositiveInt = 1920
+    fps: PositiveInt = 30
+    #: `auto` probes ffmpeg once and prefers NVENC when the build has it.
+    encoder: Literal["auto", "h264_nvenc", "libx264"] = "auto"
+    #: Quality level. Interpreted as -cq for NVENC and -crf for libx264; the
+    #: scales are close enough that one number serves both.
+    quality: Annotated[int, Field(ge=0, le=51)] = 23
+    preset: str = "p5"
+    libx264_preset: str = "medium"
+    #: Bitrate ceiling. Constant-quality alone produces 6+ Mbps on animated
+    #: gradients with grain, which is far past the point of visible improvement
+    #: and makes every upload slower. Empty disables the cap.
+    max_bitrate: str = "5M"
+    audio_bitrate: str = "192k"
+    #: EBU R128 target. -14 LUFS is what the major platforms normalise to, so
+    #: hitting it here avoids them turning the audio down unpredictably.
+    loudness_lufs: float = -14.0
+    output_dir: str = "var/video"
+    #: Hard ceiling on one ffmpeg invocation. A render that exceeds it is
+    #: killed rather than left to occupy the GPU indefinitely.
+    timeout_seconds: PositiveFloat = 900.0
+    background: BackgroundConfig = BackgroundConfig()
+    watermark: WatermarkConfig = WatermarkConfig()
+    title_card: TitleCardConfig = TitleCardConfig()
+
+    @model_validator(mode="after")
+    def _vertical_frame(self) -> RenderConfig:
+        if self.height <= self.width:
+            raise ValueError("render dimensions must be portrait (height > width)")
+        if self.width % 2 or self.height % 2:
+            raise ValueError("render dimensions must be even for yuv420p encoding")
+        return self
+
+
+class ValidationConfig(StrictModel):
+    """Checks a rendered file must pass before it is publishable.
+
+    This is the gate that stops a bad batch reaching a platform, so the defaults
+    are deliberately strict rather than permissive.
+    """
+
+    min_seconds: PositiveFloat = 12.0
+    #: Shorts, Reels and TikTok all accept three minutes; staying under it means
+    #: one render is publishable everywhere.
+    max_seconds: PositiveFloat = 179.0
+    max_bytes: PositiveInt = 300 * 1024 * 1024
+    require_audio: bool = True
+    #: Mean volume below this means the audio track is effectively silent --
+    #: usually a muxing mistake rather than a quiet voice.
+    min_mean_volume_dbfs: float = -45.0
+    require_expected_dimensions: bool = True
+    #: Rendered duration must match the narration within this tolerance.
+    duration_tolerance_seconds: PositiveFloat = 1.5
+
+
+class PublishTargetConfig(StrictModel):
+    """One publishing destination.
+
+    Every target ships disabled. Enabling one requires credentials *and*, on
+    every platform, an approval step that cannot be automated -- see
+    docs/PUBLISHING.md.
+    """
+
+    enabled: bool = False
+    adapter: str
+    rate_limit: RateLimitConfig = RateLimitConfig()
+    #: Start private. A public default plus a bug is an unrecoverable mistake.
+    privacy: Literal["private", "unlisted", "public"] = "private"
+    #: Per-day upload ceiling enforced locally, independent of the platform's.
+    daily_limit: PositiveInt = 5
+    title_max_chars: PositiveInt = 100
+    description_max_chars: PositiveInt = 4500
+    hashtags: tuple[str, ...] = ()
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class PublishingConfig(StrictModel):
+    #: Global safety interlock. While true, adapters validate and build the
+    #: request but never transmit. Turning it off is a deliberate act.
+    dry_run: bool = True
+    #: Appended to every description. Attribution is not permission, but it
+    #: makes a takedown a conversation rather than a strike.
+    attribution_template: str = "Source: {url}"
+    targets: dict[str, PublishTargetConfig] = Field(default_factory=dict)
+
+    def enabled_targets(self) -> dict[str, PublishTargetConfig]:
+        return {name: cfg for name, cfg in self.targets.items() if cfg.enabled}
+
+
+# --- sources -----------------------------------------------------------------
 
 
 class EngagementReferences(StrictModel):
@@ -339,6 +606,12 @@ class SourceConfig(StrictModel):
     #: Generic on purpose: the ranking signal never learns what a subreddit is.
     quality_overrides: dict[str, UnitFloat] = Field(default_factory=dict)
     engagement: EngagementReferences = EngagementReferences()
+    #: Communities this source must never ingest, matched against the story's
+    #: `quality_key` metadata. Enforced by the core before a story is
+    #: persisted, so it holds even if a blocked community is left in `queries`.
+    #: Generic by design: subreddits for Reddit, boards for 4chan, one
+    #: mechanism. See docs/CONTENT_POLICY.md.
+    blocked_quality_keys: tuple[str, ...] = ()
 
     # --- adapter-owned sections; validated by the adapter, not here ---
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -349,6 +622,18 @@ class SourceConfig(StrictModel):
         if quality_key is None:
             return self.quality
         return self.quality_overrides.get(quality_key, self.quality)
+
+    def is_blocked(self, quality_key: str | None) -> bool:
+        """Whether policy forbids ingesting from this community.
+
+        Case-insensitive on purpose: Reddit treats `r/NoSleep` and `r/nosleep`
+        as the same subreddit, and a blocklist that a capitalisation defeats is
+        not a blocklist.
+        """
+        if quality_key is None:
+            return False
+        folded = quality_key.casefold()
+        return any(blocked.casefold() == folded for blocked in self.blocked_quality_keys)
 
 
 # --- root --------------------------------------------------------------------
@@ -362,6 +647,12 @@ class AppConfig(StrictModel):
     deduplication: DeduplicationConfig = DeduplicationConfig()
     ranking: RankingConfig = RankingConfig()
     editorial: EditorialConfig = EditorialConfig()
+    script: ScriptConfig = ScriptConfig()
+    tts: TTSConfig = TTSConfig()
+    captions: CaptionConfig = CaptionConfig()
+    render: RenderConfig = RenderConfig()
+    validation: ValidationConfig = ValidationConfig()
+    publishing: PublishingConfig = PublishingConfig()
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
 
     #: Filled in by the loader, never read from YAML. Every relative path in the
@@ -384,6 +675,33 @@ class AppConfig(StrictModel):
     @property
     def log_file_path(self) -> Path:
         return self.resolve(self.runtime.logging.file.path)
+
+    @property
+    def audio_cache_dir(self) -> Path:
+        return self.resolve(self.tts.cache_dir)
+
+    @property
+    def video_output_dir(self) -> Path:
+        return self.resolve(self.render.output_dir)
+
+    @property
+    def background_library_dir(self) -> Path:
+        return self.resolve(self.render.background.library_dir)
+
+    def production_fingerprint(self) -> str:
+        """Stable hash of everything that changes a rendered file.
+
+        Stored on every video so a re-render under different settings is
+        detectable, and so an unchanged configuration can skip work entirely.
+        """
+        payload = {
+            "script": self.script.model_dump(mode="json"),
+            "tts": self.tts.model_dump(mode="json"),
+            "captions": self.captions.model_dump(mode="json"),
+            "render": self.render.model_dump(mode="json"),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 
     def enabled_sources(self) -> dict[str, SourceConfig]:
         return {name: cfg for name, cfg in self.sources.items() if cfg.enabled}

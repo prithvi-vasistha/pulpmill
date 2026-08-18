@@ -157,7 +157,7 @@ class TestRankingConfig:
 class TestSourceConfig:
     def test_quality_overrides_are_looked_up_by_key(self, project_root: Path) -> None:
         config = load_config(project_root=project_root, environ={}, load_dotenv=False)
-        assert config.source_quality("reddit", "nosleep") == 1.0
+        assert config.source_quality("reddit", "AmItheAsshole") == 0.95
         assert config.source_quality("reddit", "unlisted_sub") == config.sources["reddit"].quality
         assert config.source_quality("reddit", None) == config.sources["reddit"].quality
 

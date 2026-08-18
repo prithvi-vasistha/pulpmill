@@ -10,20 +10,42 @@ pulpmill config secrets     # reports which variables are set — never prints a
 pulpmill sources            # reports whether each adapter can actually fetch
 ```
 
-Nothing here blocks the pipeline. 4chan works today with no account at all, and
-`pulpmill run` skips any source whose credentials are missing rather than
-failing.
+Nothing here blocks the pipeline. Discovery, scripting, narration, rendering and
+validation all run locally with no account at all, and `pulpmill run` skips any
+source whose credentials are missing rather than failing. Publishing is the only
+stage that genuinely cannot proceed without external approval.
 
 ---
 
 ## Status summary
 
+### Sources
+
 | Source | Account needed | Cost | State today |
 |---|---|---|---|
 | 4chan | No | Free | **Working now.** Public read-only API. |
-| Reddit | **Yes** | Free (non-commercial) | Adapter complete, waiting on credentials. |
+| Reddit | **Yes** | Free (non-commercial) | **Working now.** OAuth credentials in place. |
 | X / Twitter | Yes | **Paid, ~$0.005 per post read** | Adapter complete, disabled by design. |
+
+### Production
+
+| Component | Account needed | Cost | State today |
+|---|---|---|---|
+| Kokoro TTS | No | Free, local | **Working now.** `uv sync --extra tts` + `scripts/fetch-tts-model.sh`. |
+| FFmpeg render | No | Free, local | **Working now.** NVENC on the GTX 1660 Ti. |
 | Claude editorial | Optional | Paid per token | Optional. Falls back to local ranking. |
+| Claude scripting | Optional | Paid per token | Optional. Falls back to deterministic segmentation. |
+
+### Publishing — none of this is ready, and none of it is blocked on code
+
+| Platform | Gate | Realistic timeline |
+|---|---|---|
+| YouTube | OAuth + **quota increase audit** | Weeks. 6 uploads/day until approved. |
+| Instagram | Business account + **App Review** + HTTPS hosting | Weeks. |
+| TikTok | Developer app + **content-posting audit** | Weeks. Private-only until passed. |
+
+Full detail in [PUBLISHING.md](PUBLISHING.md). Start the applications early —
+they are the critical path, and no amount of code changes that.
 
 ---
 
@@ -163,3 +185,38 @@ reason on the batch.
   prints a secret value.
 - If a credential leaks, revoke it at the source first (Reddit app settings,
   X developer portal, Anthropic console), then rotate `.env`.
+
+
+---
+
+## 4. Publishing platforms — the long pole
+
+Read [PUBLISHING.md](PUBLISHING.md) first. Short version:
+
+| Variable | Platform | Gate before it works |
+|---|---|---|
+| `PULPMILL_YOUTUBE_CLIENT_ID` | YouTube | OAuth consent screen must be **published**, or tokens die every 7 days |
+| `PULPMILL_YOUTUBE_CLIENT_SECRET` | YouTube | — |
+| `PULPMILL_YOUTUBE_REFRESH_TOKEN` | YouTube | Quota increase needed above ~6 uploads/day |
+| `PULPMILL_INSTAGRAM_ACCESS_TOKEN` | Instagram | App Review for `instagram_content_publish` |
+| `PULPMILL_INSTAGRAM_USER_ID` | Instagram | Also needs HTTPS hosting — Meta fetches the file |
+| `PULPMILL_TIKTOK_ACCESS_TOKEN` | TikTok | Content-posting audit; private-only until passed |
+
+You can rehearse the entire publish path today, with none of these set:
+
+```bash
+pulpmill targets                              # what each platform needs
+pulpmill publish --target youtube --limit 1   # builds and records the request
+```
+
+## 5. Kokoro TTS — no account, one download
+
+Not a credential, but it belongs on the setup list:
+
+```bash
+uv sync --extra tts          # ~200 MB of packages
+./scripts/fetch-tts-model.sh # ~340 MB of weights into var/models/
+```
+
+Then `pulpmill assets` should report the provider as ready. No API key, no
+network at run time, no per-character cost.

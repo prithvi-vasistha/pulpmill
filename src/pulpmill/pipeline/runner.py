@@ -35,6 +35,7 @@ from pulpmill.domain.source import FetchRequest, SourceAdapter
 from pulpmill.domain.story import Story
 from pulpmill.infrastructure.clock import to_iso
 from pulpmill.infrastructure.logging import get_logger
+from pulpmill.ingestion.base import QUALITY_KEY
 from pulpmill.ingestion.registry import AdapterContext, create_adapter
 from pulpmill.persistence.repositories.jobs import FailureRecord
 from pulpmill.pipeline.context import Application
@@ -184,7 +185,14 @@ class PipelineRunner:
                 limit=limit,
                 max_pages=max_pages,
             )
-            self._drain(adapter, request, report=report, job_id=job_id, name=name)
+            self._drain(
+                adapter,
+                request,
+                report=report,
+                job_id=job_id,
+                name=name,
+                adapter_config=source_config,
+            )
         except SourceUnavailableError as exc:
             report.available = False
             report.detail = str(exc)
@@ -206,6 +214,18 @@ class PipelineRunner:
         log.info("source_complete", **report.as_dict())
         return report
 
+    @staticmethod
+    def _blocked_community(story: Story, source_config: SourceConfig) -> str | None:
+        """The community this story came from, if policy forbids ingesting it.
+
+        Keyed on the story's `quality_key` metadata, which every adapter already
+        sets to whatever "community" means for its platform -- subreddit for
+        Reddit, board for 4chan. The core never learns what a subreddit is.
+        """
+        community = story.metadata.get(QUALITY_KEY)
+        key = str(community) if community is not None else None
+        return key if source_config.is_blocked(key) else None
+
     def _drain(
         self,
         adapter: SourceAdapter,
@@ -214,6 +234,7 @@ class PipelineRunner:
         report: SourceReport,
         job_id: str,
         name: str,
+        adapter_config: SourceConfig,
     ) -> None:
         """Consume an adapter's stream, processing one story at a time."""
         for raw in adapter.fetch(request):
@@ -240,6 +261,22 @@ class PipelineRunner:
 
             if story is None:
                 report.filtered += 1
+                continue
+
+            blocked = self._blocked_community(story, adapter_config)
+            if blocked is not None:
+                # Content policy is enforced here rather than in the adapter, so
+                # it holds for every source with one mechanism and cannot be
+                # defeated by a blocked community being left in `queries`.
+                report.filtered += 1
+                report.blocked += 1
+                self._log.info(
+                    "story_blocked_by_policy",
+                    source=name,
+                    community=blocked,
+                    source_id=story.source_id,
+                    url=story.canonical_url,
+                )
                 continue
 
             try:

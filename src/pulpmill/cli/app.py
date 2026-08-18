@@ -20,7 +20,7 @@ from typer.core import TyperGroup
 
 from pulpmill import __version__
 from pulpmill.cli import render
-from pulpmill.cli.commands import admin_cmds, pipeline_cmds, report_cmds
+from pulpmill.cli.commands import admin_cmds, pipeline_cmds, production_cmds, report_cmds
 from pulpmill.cli.context import CliContext
 from pulpmill.domain.errors import ConfigError, PulpmillError
 
@@ -61,6 +61,7 @@ app = typer.Typer(
 )
 
 pipeline_cmds.register(app)
+production_cmds.register(app)
 report_cmds.register(app)
 admin_cmds.register(app)
 

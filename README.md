@@ -1,20 +1,24 @@
 # pulpmill
 
-Local-first story discovery, deduplication and ranking engine — the ingestion
-foundation for an automated short-form video pipeline.
+Local-first pipeline that turns public internet stories into short-form vertical
+video.
 
-It queries multiple internet sources, normalizes what it finds into one story
-model, removes duplicates deterministically, scores every story with a
-transparent weighted ranking, persists all of it to SQLite, and shows you the
-best candidates. It runs entirely locally and needs no AI service.
+It queries multiple sources, normalizes what it finds into one story model,
+removes duplicates deterministically, scores everything with a transparent
+weighted ranking, writes narration scripts, synthesises speech locally, renders
+captioned 1080×1920 video with ffmpeg, validates the result, and publishes it.
+It runs entirely on one machine and needs no AI service at any stage.
 
 ```
-SOURCE ─▶ FETCH ─▶ NORMALIZE ─▶ DEDUPLICATE ─▶ PERSIST ─▶ RANK ─▶ TOP CANDIDATES
+SOURCE ─▶ FETCH ─▶ NORMALIZE ─▶ DEDUPE ─▶ PERSIST ─▶ RANK ─▶ SELECT
+                                                                │
+   PUBLISH ◀─ VALIDATE ◀─ RENDER ◀─ NARRATE ◀─ SCRIPT ◀─────────┘
 ```
 
-**Status:** the ingestion and ranking slice is complete and working. Script
-generation, TTS, and rendering are later stages; the interfaces and schema they
-plug into already exist. See [ARCHITECTURE.md](ARCHITECTURE.md).
+**Status:** every stage from discovery through validation runs end to end today.
+Publishing adapters for YouTube, Instagram and TikTok are implemented and tested
+but ship disabled — each platform gates on an approval process that takes weeks.
+See [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ---
 
@@ -24,7 +28,7 @@ plug into already exist. See [ARCHITECTURE.md](ARCHITECTURE.md).
 # 1. Install (uv manages the Python version and the virtualenv)
 uv sync
 
-# 2. Run the pipeline. 4chan needs no account, so this works immediately.
+# 2. Discover. 4chan needs no account, so this works immediately.
 uv run pulpmill run --source fourchan --limit 20
 
 # 3. Look at what it found
@@ -42,8 +46,27 @@ uv run pulpmill sources # confirm reddit reads "ready"
 uv run pulpmill run
 ```
 
+### Making videos
+
+```bash
+# One-time: local speech synthesis (~200 MB of packages, ~340 MB of weights)
+uv sync --extra tts
+./scripts/fetch-tts-model.sh
+uv run pulpmill assets          # confirm ffmpeg, encoder and TTS are ready
+
+# Then, per batch
+uv run pulpmill select          # choose what to publish
+uv run pulpmill produce         # script → narrate → render → validate
+uv run pulpmill publish --target youtube --limit 1   # dry run; --live to transmit
+```
+
+No gameplay footage yet? Nothing breaks. `render.background.mode: auto` uses a
+generated animated gradient until clips appear in `assets/backgrounds/`, then
+switches to them on the next render with no configuration change.
+
 Everything is safe to re-run. Scraping the same post twice updates one row;
-re-ranking an unchanged story is a no-op.
+re-ranking an unchanged story is a no-op; and an unchanged script resolves to
+the audio already on disk without touching the model.
 
 ---
 
@@ -72,8 +95,17 @@ Only commands that actually work are exposed.
 | `pulpmill scrape` | Ingest only, no ranking |
 | `pulpmill rank` | Score stored stories; skips ones already scored under the current config |
 | `pulpmill dedupe` | Re-check stored stories against current dedup settings |
+| `pulpmill policy` | Check stored stories against the content-policy blocklist |
 | `pulpmill renormalize` | Recompute text, hashes and fingerprints after a normalizer change |
 | `pulpmill select` | Pick the next publication batch from the top candidates |
+| `pulpmill script` | Turn selected stories into narration scripts and numbered parts |
+| `pulpmill narrate` | Synthesise narration audio with word timings |
+| `pulpmill render` | Compose vertical video from narration, captions and a background |
+| `pulpmill validate` | Check rendered files against the publishability rules |
+| `pulpmill produce` | All four production stages in order |
+| `pulpmill publish` | Publish validated videos. Dry run unless `--live` |
+| `pulpmill targets` | Publishing targets and what each one still needs |
+| `pulpmill assets` | ffmpeg, encoder, TTS and background-clip readiness |
 | `pulpmill sources` | List sources and whether each can currently fetch |
 | `pulpmill status` | Counts by status and source, duplicates by layer, failures, recent jobs |
 | `pulpmill top` | Highest-ranked candidates |
@@ -177,10 +209,20 @@ deduplication would slot in behind the same `DedupStrategy` interface.
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Setup, tests, troubleshooting, adding a source |
 | [docs/SOURCES.md](docs/SOURCES.md) | Per-source acquisition, limits, and honest caveats |
 | [docs/CREDENTIALS.md](docs/CREDENTIALS.md) | **The account setup checklist** |
+| [docs/PUBLISHING.md](docs/PUBLISHING.md) | Platform approval gates, quotas, metadata |
+| [docs/CONTENT_POLICY.md](docs/CONTENT_POLICY.md) | Which communities are off limits, and why |
 
 ---
 
 ## Requirements
 
-Linux, Python ≥ 3.12 (uv provides it), SQLite. FFmpeg and a CUDA GPU are needed
-only by the later rendering and TTS stages, not by anything here.
+Linux, Python ≥ 3.12 (uv provides it), SQLite — that is the whole requirement
+for discovery and ranking.
+
+Rendering needs **FFmpeg** with libass. An NVIDIA GPU is used automatically when
+the build has NVENC and is not required; `render.encoder: auto` falls back to
+libx264. Speech synthesis is CPU-only by default, which deliberately leaves the
+GPU to the encoder.
+
+Verified on the development machine: FFmpeg 8.1.2, GTX 1660 Ti (h264_nvenc),
+Kokoro-82M via ONNX Runtime on CPU at roughly 2× realtime.

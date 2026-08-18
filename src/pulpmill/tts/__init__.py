@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from pulpmill.domain.media import WordTiming
+
 #: Words per minute for duration estimation. Roughly conversational narration.
 DEFAULT_WPM = 150.0
 
@@ -49,15 +51,6 @@ class SpeechRequest:
             digest.update(part.encode("utf-8"))
             digest.update(b"\x1f")
         return digest.hexdigest()
-
-
-@dataclass(frozen=True, slots=True)
-class WordTiming:
-    """Per-word timing, the input to subtitle generation."""
-
-    word: str
-    start_seconds: float
-    end_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
