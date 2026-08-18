@@ -117,23 +117,55 @@ class TestLayerThree:
 
 
 class TestLayerFour:
-    def test_a_lightly_edited_repost_is_caught(self, config, stories, make_story) -> None:
+    """SimHash near-duplicate detection, and its deliberately narrow scope.
+
+    Threshold 3 is calibrated on real content: the closest pair of genuinely
+    *different* same-genre stories measures 5 bits apart. That leaves a narrow
+    band, so this layer catches reposts that are substantially the same text and
+    nothing more. The tests below pin both halves of that trade-off.
+    """
+
+    def test_a_reposted_story_is_caught(self, config, stories, make_story) -> None:
+        """Reformatting and a word substitution are still the same story."""
         original = make_story(source_id="t3_orig")
         stories.upsert(original)
 
-        edited = make_story(
-            source_id="t3_edited",
-            canonical_url="https://www.reddit.com/r/x/comments/edited/",
-            body=original.normalized_content.replace("roommate", "flatmate")
-            + "\n\nEdit: thanks for the awards, everyone.",
+        repost = make_story(
+            source_id="t3_repost",
+            canonical_url="https://www.reddit.com/r/x/comments/repost/",
+            body="Throwaway account.\n\n"
+            + original.normalized_content.replace("roommate", "flatmate"),
         )
-        assert edited.content_hash != original.content_hash
+        assert repost.content_hash != original.content_hash
 
-        verdict = engine_for(config, stories).evaluate(edited)
+        verdict = engine_for(config, stories).evaluate(repost)
         assert verdict.outcome is DedupOutcome.DUPLICATE
         assert verdict.layer is DedupLayer.NEAR_DUPLICATE
         assert verdict.detail is not None
         assert verdict.detail["hamming_distance"] <= verdict.detail["threshold"]
+
+    def test_a_substantially_rewritten_repost_is_not_caught(
+        self, config, stories, make_story
+    ) -> None:
+        """The honest limit of this layer -- and why that is the right default.
+
+        A retelling with a rewritten opening lands beyond threshold 3. Catching
+        it would mean raising the threshold past the point where genuinely
+        different same-genre stories start merging, which costs real stories.
+        Preferring a missed duplicate over a lost story is deliberate: the
+        novelty ranking signal demotes near-similar stories anyway, so a repost
+        that slips through is ranked down rather than published twice.
+        """
+        original = make_story(source_id="t3_orig")
+        stories.upsert(original)
+
+        rewritten = make_story(
+            source_id="t3_rewritten",
+            canonical_url="https://www.reddit.com/r/x/comments/rewritten/",
+            body="I have been covering my flatmate's rent since April and I am done.\n\n"
+            + original.normalized_content.split(". ", 1)[1],
+        )
+        assert engine_for(config, stories).evaluate(rewritten).outcome is DedupOutcome.NEW
 
     def test_unrelated_stories_survive_the_near_duplicate_layer(
         self, config, stories, make_story

@@ -143,14 +143,14 @@ deduplication:
     near_duplicate:
       enabled: true
       algorithm: simhash64
-      hamming_threshold: 6
+      hamming_threshold: 3
       min_tokens: 40
       band_count: 4
 ```
 
 | Setting | Effect |
 |---|---|
-| `hamming_threshold` | Bits two fingerprints may differ by. **3** = near-identical only. **6** (default) catches a word swapped throughout plus an appended "Edit:" line. **>10** starts merging distinct stories; hard-capped at 12. |
+| `hamming_threshold` | Bits two fingerprints may differ by. **3** (default) is calibrated on real data: the closest pair of genuinely *different* same-genre stories measures 5, so 3 leaves a two-bit margin and gives zero false positives. **Raising this is dangerous** — 6 merged two unrelated nosleep stories on the first live run, because same-genre long-form prose converges in SimHash space. Re-measure against real content before changing it. |
 | `min_tokens` | Below this, fingerprints are unstable and the layer abstains rather than guessing. |
 | `band_count` | Index selectivity. Recall is provably complete below `band_count` and best-effort above it. |
 

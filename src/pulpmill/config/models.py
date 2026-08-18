@@ -130,12 +130,19 @@ class NearDuplicateConfig(StrictModel):
     algorithm: Literal["simhash64"] = "simhash64"
     #: Maximum Hamming distance between two 64-bit fingerprints to call a match.
     #:
-    #: Calibration, measured on real bodies: a one-word substitution repeated
-    #: through a story plus an appended "Edit:" line lands around 5-6 bits, while
-    #: genuinely unrelated stories sit above 10. 6 therefore catches the
-    #: lightly-edited repost this layer exists for, with real headroom before
-    #: distinct stories start merging. Past ~10 that headroom is gone.
-    hamming_threshold: Annotated[int, Field(ge=0, le=12)] = 6
+    #: Calibrated against real ingested stories, not synthetic pairs. Measured
+    #: over r/nosleep and /x/ content: the closest pair of *genuinely different*
+    #: stories sits at distance 5, and unrelated pairs have a median of 15.
+    #: Same-genre long-form prose converges in SimHash space -- two first-person
+    #: horror stories share so much vocabulary that the distinguishing signal
+    #: washes out -- so the usable margin is much tighter than a synthetic
+    #: "same story, one word changed" test suggests.
+    #:
+    #: 3 produced zero false positives on that corpus, leaves a 2-bit margin,
+    #: and keeps recall provably complete (3 < band_count). A previous value of
+    #: 6 merged two unrelated nosleep stories on the first live run.
+    #: Do not raise this without re-measuring against real data.
+    hamming_threshold: Annotated[int, Field(ge=0, le=12)] = 3
     min_tokens: PositiveInt = 40
     #: Bands the fingerprint is split into for the LSH index lookup. Fewer,
     #: wider bands are more selective (fewer candidates examined per query);

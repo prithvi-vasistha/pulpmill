@@ -84,10 +84,13 @@ deduplication:
       # NOT semantic/embedding dedup -- that remains a future layer.
       enabled: true
       algorithm: simhash64
-      # Measured on real bodies: a word swapped throughout a story plus an
-      # appended "Edit:" line is ~5-6 bits apart; unrelated stories are >10.
-      # 6 catches the repost this layer exists for with headroom to spare.
-      hamming_threshold: 6
+      # Calibrated against real ingested stories: the closest pair of
+      # genuinely DIFFERENT nosleep stories measured 5 bits apart, median 15.
+      # Same-genre long-form prose converges in SimHash space, so the usable
+      # margin is tight. 3 gave zero false positives with 2 bits to spare.
+      # A value of 6 merged two unrelated stories on the first live run.
+      # Do not raise without re-measuring against real data.
+      hamming_threshold: 3
       # Short posts produce unstable fingerprints; skip them entirely.
       min_tokens: 40
       # Fewer, wider bands = more selective index lookups. Recall is provably

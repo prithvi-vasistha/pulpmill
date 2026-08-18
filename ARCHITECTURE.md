@@ -150,11 +150,22 @@ small Hamming distance almost always share a band, so candidate lookup is an
 indexed equality query. Banding is a recall filter; the exact Hamming distance
 makes the decision.
 
-The default threshold of 6 was calibrated against real bodies: a word swapped
-throughout a story plus an appended "Edit:" line sits at ~5–6 bits, while
-unrelated stories are >10. Below `band_count` recall is provably complete; above
-it, best-effort — acceptable for a layer sitting behind three exact ones, and
-reported by `NearDuplicateConfig.recall_is_guaranteed`.
+The default threshold of 3 is calibrated against **real ingested stories**, not
+synthetic pairs. Measured over r/nosleep and /x/ content: the closest pair of
+genuinely *different* stories sits at Hamming distance 5, with a median of 15
+across all pairs. Same-genre long-form prose converges in SimHash space — two
+first-person horror stories share so much vocabulary that the distinguishing
+signal washes out — so the usable margin is far tighter than a "same story, one
+word changed" test suggests. A threshold of 6 merged two unrelated nosleep
+stories on the very first live run.
+
+At 3 the layer catches reposts that are substantially the same text: identical,
+reformatted, prepended-intro, or single-word-substitution (measured 0–3 bits).
+It does **not** catch substantially rewritten retellings, and that is the right
+trade: a missed duplicate is ranked down by the novelty signal, whereas a false
+positive silently destroys a real story. Threshold 3 also keeps the pigeonhole
+bound (3 < `band_count`), so LSH recall is provably complete rather than
+best-effort — reported by `NearDuplicateConfig.recall_is_guaranteed`.
 
 A story marked `DUPLICATE` is removed from the LSH index so it cannot become the
 "original" for a later arrival.

@@ -128,6 +128,24 @@ class TestRankingConfig:
         with pytest.raises(ValueError, match="less than or equal to 12"):
             NearDuplicateConfig(hamming_threshold=13, band_count=4)
 
+    def test_the_near_duplicate_threshold_stays_conservative(self) -> None:
+        """Regression: a threshold of 6 merged two unrelated nosleep stories.
+
+        Measured over real ingested content, the closest pair of genuinely
+        different same-genre stories sits at Hamming distance 5. Same-genre
+        long-form prose converges in SimHash space, so the usable margin is far
+        tighter than a synthetic "same story, one word changed" pair suggests.
+        Anything above 4 starts merging distinct stories.
+        """
+        from pulpmill.config.models import NearDuplicateConfig
+
+        assert NearDuplicateConfig().hamming_threshold <= 4
+
+    def test_the_shipped_threshold_keeps_recall_guaranteed(self, project_root: Path) -> None:
+        """The default must stay below band_count so LSH recall is provable."""
+        config = load_config(project_root=project_root, environ={}, load_dotenv=False)
+        assert config.deduplication.layers.near_duplicate.recall_is_guaranteed
+
     def test_recall_guarantee_is_reported_honestly(self) -> None:
         """Below band_count the index provably finds every match; above it not."""
         from pulpmill.config.models import NearDuplicateConfig
