@@ -20,7 +20,12 @@ from typing import Protocol, runtime_checkable
 from pulpmill.config.models import AppConfig, PublishTargetConfig
 from pulpmill.config.secrets import SecretStore
 from pulpmill.domain.errors import PublishError
-from pulpmill.domain.publishing import PublisherHealth, PublishRequest, PublishResult
+from pulpmill.domain.publishing import (
+    PublisherHealth,
+    PublishRequest,
+    PublishResult,
+    VideoMetadata,
+)
 from pulpmill.infrastructure.clock import SYSTEM_CLOCK, Clock
 
 
@@ -55,6 +60,18 @@ class Publisher(Protocol):
 
     def publish(self, request: PublishRequest) -> PublishResult:
         """Upload one video. Raises `PublishError` on failure."""
+        ...
+
+    def update_metadata(self, remote_id: str, metadata: VideoMetadata) -> bool:
+        """Rewrite an already-published video's title and description.
+
+        Returns False when the platform has no such capability -- Instagram and
+        TikTok both publish captions immutably, so a series index can only ever
+        point backwards there. Only YouTube can be corrected after the fact.
+
+        Not raising for the unsupported case is deliberate: "this platform
+        cannot do it" is a fact about the platform, not a failure of the run.
+        """
         ...
 
     def close(self) -> None: ...

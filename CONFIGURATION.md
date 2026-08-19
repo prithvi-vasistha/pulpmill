@@ -294,19 +294,27 @@ How a story becomes a narration script.
 |---|---|---|
 | `provider` | `deterministic` | `claude` adds hook and pacing advice, with fallback |
 | `version` | `2026.08.1` | Bump when script behaviour changes; stored on every script |
-| `words_per_minute` | `150.0` | Must track the real rate of the configured voice |
-| `target_seconds` | `55.0` | Aimed-for length of one part |
+| `words_per_minute` | `185.0` | **Measured**, not assumed — see below |
+| `target_seconds` | `75.0` | Aimed-for length of one part |
 | `min_seconds` | `15.0` | Shorter than this and the story is refused |
-| `max_seconds` | `170.0` | Hard ceiling; under the 3-minute platform limit |
-| `max_parts` | `6` | A story needing more is **rejected, not truncated** |
+| `max_seconds` | `90.0` | A story longer than this splits. Also any part's ceiling |
+| `max_parts` | `10` | A story needing more is **rejected, not truncated** |
 | `include_hook` / `include_outro` | `true` | Framing lines the pipeline writes |
 | `outro_template` | `"Part {next_part} is up next."` | `{next_part}`, `{total_parts}` |
 | `final_outro` | `"Follow for more stories like this."` | Used on the last part |
 
-**`target_seconds` decides how many videos you get from a story.** At 55s, an
-800-word story becomes roughly six parts; at 90s it becomes four longer ones.
-Both are defensible — more parts means more uploads, fewer parts means better
-completion rates. The setting does exactly what it says, so choose deliberately.
+**`words_per_minute` is the only thing connecting a planned part length to a
+real one, so it is measured rather than guessed.** Across the first eight
+Kokoro-narrated scripts, `af_heart` ran at 194–206 wpm on ordinary Reddit prose
+and 118–150 wpm on acronym-dense board text where letters are spoken
+individually. 185 tracks the target corpus while staying under the fast cases.
+**Re-measure after changing voice or speed** — `validation` will catch the
+overrun either way, but only after a video has been rendered.
+
+**`target_seconds` and `max_seconds` decide how many videos you get.** At the
+shipped values a story under 90s is one video, and anything longer splits into
+roughly 75-second parts. Measured over the current 71-story corpus: 36 single
+part, 20 two-part, 13 three-part, 2 longer — 125 videos in total.
 
 **Rejection is intentional.** If a story cannot fit in `max_parts` even at
 `max_seconds` per part, the script stage moves it to `REJECTED` rather than
@@ -328,11 +336,21 @@ you would rather have it.
 | `sentence_gap_seconds` | `0.28` | Silence inserted between sentences |
 | `paragraph_gap_seconds` | `0.45` | Longer pause at a paragraph break |
 | `max_clip_seconds` | `300.0` | Refuses an implausibly long clip from a looping model |
+| `max_words_per_chunk` | `70` | Longest single utterance sent to the model — see below |
 | `kokoro.model_path` | `var/models/kokoro-v1.0.onnx` | ONNX backend only |
 | `kokoro.voices_path` | `var/models/voices-v1.0.bin` | ONNX backend only |
 | `kokoro.device` | `auto` | `cuda` is available to the PyTorch backend |
 
 Weights are not vendored. Run `./scripts/fetch-tts-model.sh` once.
+
+**`max_words_per_chunk` is a hard model limit, not a preference.** Kokoro
+truncates past 510 phonemes and then raises `IndexError`; measured against
+`af_heart`, that begins at about 85 spoken words. Any sentence longer than this
+is subdivided at clause boundaries before synthesis. Run-on posts with no
+sentence punctuation are common on 4chan and in low-effort Reddit posts, so this
+is a normal input rather than an edge case — and without the subdivision such a
+post both crashes narration *and* forces a part past `max_seconds`, because a
+sentence is the smallest unit part planning can cut at.
 
 The gaps are not only cosmetic: caption grouping treats a pause as a hard break,
 so shortening them below ~0.18s makes captions run sentences together.
@@ -417,6 +435,13 @@ The gate that stops a bad batch reaching a platform. Defaults are strict.
 | `min_mean_volume_dbfs` | `-45.0` | A silent track is usually a muxing mistake |
 | `require_expected_dimensions` | `true` | Must match `render.width`/`height` |
 | `duration_tolerance_seconds` | `1.5` | Rendered length vs narration length |
+| `enforce_script_part_limit` | `true` | Also check each part against `script.max_seconds` |
+| `part_limit_tolerance_seconds` | `8.0` | Headroom before an overrun is a failure |
+
+`enforce_script_part_limit` exists because planning uses an *estimated* speaking
+rate. A part can be planned inside `script.max_seconds` and still narrate past
+it, and without this check that overrun is invisible until someone watches the
+video.
 
 `min_mean_volume_dbfs` is what catches the worst failure mode: a video that
 looks completely fine and has no narration. The mock TTS provider writes

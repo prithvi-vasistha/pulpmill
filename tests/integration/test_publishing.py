@@ -8,6 +8,7 @@ transmits nothing, and that a video which failed validation is never sent.
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections.abc import Callable
 from dataclasses import replace
@@ -44,13 +45,29 @@ def enable_target(config: AppConfig, name: str, **overrides: object) -> AppConfi
 
 
 def youtube_handler(*, calls: list[httpx.Request]) -> Callable[[httpx.Request], httpx.Response]:
+    """A YouTube stand-in that issues a distinct id per upload.
+
+    Distinct ids matter: two parts sharing one URL would make the series
+    cross-linking assertions pass for the wrong reason.
+    """
+    uploaded = itertools.count(1)
+
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if request.url.host == "oauth2.googleapis.com":
             return httpx.Response(200, json={"access_token": "at-1", "expires_in": 3600})
-        if request.method == "POST":
+        if request.url.host == "www.googleapis.com" and request.method == "POST":
             return httpx.Response(200, headers={"location": YOUTUBE_SESSION_URL}, json={})
-        return httpx.Response(200, json={"id": "vid-123", "status": {"privacyStatus": "private"}})
+        if request.method == "PUT" and request.url.host == "upload.example":
+            return httpx.Response(
+                200,
+                json={
+                    "id": f"vid-{next(uploaded)}",
+                    "status": {"privacyStatus": "private"},
+                },
+            )
+        # videos.update, which returns the resource it just wrote.
+        return httpx.Response(200, json={"id": "vid-1", "snippet": {}})
 
     return handler
 
@@ -141,6 +158,18 @@ def add_part(
     )
     app.scripts.save(extra, requested_provider="deterministic", words_per_minute=150.0)
 
+    # The real script builder produces every part together with a consistent
+    # `total_parts`. Re-save the earlier ones so this helper matches: a part
+    # whose total_parts still says 1 is not a series and never gets linked.
+    for number in range(1, part_number):
+        earlier = replace(
+            script,
+            id=build_script_id(script.story_id, number),
+            part_number=number,
+            total_parts=part_number,
+        )
+        app.scripts.save(earlier, requested_provider="deterministic", words_per_minute=150.0)
+
     audio_id = f"audio-{part_number}"
     with app.database.transaction() as connection:
         connection.execute(
@@ -186,6 +215,7 @@ def service(
         stories=app.stories,
         publications=app.publications,
         validations=app.validations,
+        scripts=app.scripts,
         clock=app.clock,
         transport=transport,
     )
@@ -290,7 +320,7 @@ class TestLivePublishing:
         assert report.published == 1
         result = report.results[0][1]
         assert result.state is PublishState.PUBLISHED
-        assert result.remote_id == "vid-123"
+        assert result.remote_id == "vid-1"
         assert result.remote_url is not None
         assert app.stories.require(story.id).status.value == "PUBLISHED"
 
@@ -416,3 +446,136 @@ class TestHealth:
         for status in health.values():
             if not status.available:
                 assert status.detail
+
+
+class TestSeriesCrossLinking:
+    """A viewer arriving at part three must be able to walk back to part one."""
+
+    def publish_part(self, app, config, transport, script, video):  # type: ignore[no-untyped-def]
+        pass_validation(app, video)
+        return service(app, enable_target(config, "youtube"), transport).publish(
+            video, script, target_names=["youtube"], dry_run=False
+        )
+
+    def test_the_first_part_has_nothing_to_link(
+        self, app: Application, config: AppConfig, prepared
+    ) -> None:  # type: ignore[no-untyped-def]
+        _, script, video = prepared
+        transport = httpx.MockTransport(youtube_handler(calls=[]))
+        self.publish_part(app, config, transport, script, video)
+
+        record = app.publications.get(video.id, "youtube")
+        assert record is not None
+        assert "Watch the full story" not in record.request["description"]
+
+    def test_a_later_part_links_the_earlier_ones(
+        self, app: Application, config: AppConfig, prepared, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        _, script, video = prepared
+        transport = httpx.MockTransport(youtube_handler(calls=[]))
+        self.publish_part(app, config, transport, script, video)
+
+        second_script, second_video = add_part(app, script, part_number=2, path=video.path)
+        self.publish_part(app, config, transport, second_script, second_video)
+
+        record = app.publications.get(second_video.id, "youtube")
+        assert record is not None
+        assert "Watch the full story" in record.request["description"]
+        assert "Part 1: https://www.youtube.com/shorts/vid-1" in record.request["description"]
+
+    def test_a_part_never_links_itself(self, app: Application, config: AppConfig, prepared) -> None:  # type: ignore[no-untyped-def]
+        _, script, video = prepared
+        transport = httpx.MockTransport(youtube_handler(calls=[]))
+        self.publish_part(app, config, transport, script, video)
+
+        siblings = app.publications.published_siblings(
+            video.story_id, "youtube", exclude_video_id=video.id
+        )
+        assert siblings == []
+
+    def test_dry_runs_are_never_linked_to(
+        self, app: Application, config: AppConfig, prepared
+    ) -> None:  # type: ignore[no-untyped-def]
+        """A rehearsal has no URL, so there is nothing to point a viewer at."""
+        _, script, video = prepared
+        pass_validation(app, video)
+        service(app, enable_target(config, "youtube")).publish(
+            video, script, target_names=["youtube"], dry_run=True
+        )
+        assert app.publications.published_siblings(video.story_id, "youtube") == []
+
+
+class TestRelink:
+    """Publishing is ordered, so part one cannot link forward when it goes up."""
+
+    def publish_both(self, app, config, transport, script, video):  # type: ignore[no-untyped-def]
+        pass_validation(app, video)
+        svc = service(app, enable_target(config, "youtube"), transport)
+        svc.publish(video, script, target_names=["youtube"], dry_run=False)
+        second_script, second_video = add_part(app, script, part_number=2, path=video.path)
+        pass_validation(app, second_video)
+        svc.publish(second_video, second_script, target_names=["youtube"], dry_run=False)
+        return second_script, second_video
+
+    def test_a_dry_run_reports_without_transmitting(
+        self, app: Application, config: AppConfig, prepared
+    ) -> None:  # type: ignore[no-untyped-def]
+        _, script, video = prepared
+        calls: list[httpx.Request] = []
+        transport = httpx.MockTransport(youtube_handler(calls=calls))
+        self.publish_both(app, config, transport, script, video)
+
+        before = len(calls)
+        report = service(app, enable_target(config, "youtube"), transport).relink(
+            target_names=["youtube"], dry_run=True
+        )
+        assert report.would_update >= 1
+        assert report.updated == 0
+        assert len(calls) == before
+
+    def test_it_backfills_the_first_part(
+        self, app: Application, config: AppConfig, prepared
+    ) -> None:  # type: ignore[no-untyped-def]
+        _, script, video = prepared
+        transport = httpx.MockTransport(youtube_handler(calls=[]))
+        self.publish_both(app, config, transport, script, video)
+
+        report = service(app, enable_target(config, "youtube"), transport).relink(
+            target_names=["youtube"], dry_run=False
+        )
+        assert report.updated >= 1
+
+        record = app.publications.get(video.id, "youtube")
+        assert record is not None
+        assert "Watch the full story" in record.request["description"]
+        assert "Part 2:" in record.request["description"]
+
+    def test_relinking_twice_changes_nothing_the_second_time(
+        self, app: Application, config: AppConfig, prepared
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Otherwise a scheduled relink burns quota rewriting identical text."""
+        _, script, video = prepared
+        transport = httpx.MockTransport(youtube_handler(calls=[]))
+        self.publish_both(app, config, transport, script, video)
+
+        svc = service(app, enable_target(config, "youtube"), transport)
+        svc.relink(target_names=["youtube"], dry_run=False)
+        second = svc.relink(target_names=["youtube"], dry_run=False)
+
+        assert second.updated == 0
+        assert second.unchanged == second.examined
+
+    def test_a_single_part_story_is_left_alone(
+        self, app: Application, config: AppConfig, prepared
+    ) -> None:  # type: ignore[no-untyped-def]
+        _, script, video = prepared
+        transport = httpx.MockTransport(youtube_handler(calls=[]))
+        self.publish_part = None  # unused here
+        pass_validation(app, video)
+        service(app, enable_target(config, "youtube"), transport).publish(
+            video, script, target_names=["youtube"], dry_run=False
+        )
+        report = service(app, enable_target(config, "youtube"), transport).relink(
+            target_names=["youtube"], dry_run=False
+        )
+        assert report.examined == 0

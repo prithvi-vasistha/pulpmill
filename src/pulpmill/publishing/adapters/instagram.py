@@ -34,6 +34,7 @@ from pulpmill.domain.publishing import (
     PublishRequest,
     PublishResult,
     PublishState,
+    VideoMetadata,
 )
 from pulpmill.infrastructure.http import HttpClient
 from pulpmill.infrastructure.logging import get_logger
@@ -241,6 +242,15 @@ class InstagramPublisher:
                 transport=self._context.transport,  # type: ignore[arg-type]
             )
         return self._client
+
+    def update_metadata(self, remote_id: str, metadata: VideoMetadata) -> bool:  # noqa: ARG002
+        """Not supported: instagram captions are immutable once published.
+
+        A series index on this platform can therefore only point backwards, at
+        parts that were already live when this one went up.
+        """
+        _log.info("instagram_update_unsupported", target=self.name, remote_id=remote_id)
+        return False
 
     def close(self) -> None:
         if self._client is not None:

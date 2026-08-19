@@ -158,6 +158,43 @@ Attribution is not permission. It makes a takedown a conversation rather than a
 strike; it does not make the underlying use licensed. See
 [CONTENT_POLICY.md](CONTENT_POLICY.md).
 
+## Series cross-linking
+
+A story longer than `script.max_seconds` becomes several videos, and each one's
+description carries a linked index of the others:
+
+```
+Part 2 of 3.
+
+Watch the full story:
+Part 1: https://www.youtube.com/shorts/...
+Part 3: https://www.youtube.com/shorts/...
+```
+
+**Ordering makes this a two-step problem.** Part one is published before part
+two exists, so at the moment it goes up there is nothing to link forward to.
+Each part therefore links whatever was already live when it was published —
+part two links part one, part three links parts one and two — and part one is
+left incomplete.
+
+`pulpmill relink` fills in the rest once a series is fully published:
+
+```bash
+pulpmill relink                 # dry run: report what would change
+pulpmill relink --live          # rewrite the descriptions
+pulpmill relink --story <id>    # just one story
+```
+
+It is idempotent: a second run finds nothing to change, so it is safe to
+schedule. `videos.update` costs 50 quota units against the same allowance an
+upload spends 1600 of, which is what makes relinking a back catalogue
+affordable.
+
+**YouTube only.** Instagram and TikTok publish captions immutably — there is no
+edit endpoint on either — so their earlier parts keep pointing backwards. That
+is reported in the relink summary as "platform cannot edit" rather than being
+silently skipped.
+
 ## Adding a platform
 
 The same four steps as adding a source:

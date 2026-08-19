@@ -332,14 +332,23 @@ class ScriptConfig(StrictModel):
     #: Bump when script-building behaviour changes. Stored on every script.
     version: str = "2026.08.1"
     #: Narration rate used to convert words to seconds before any audio exists.
-    #: Must stay close to the TTS voice's real rate or parts drift long.
-    words_per_minute: PositiveFloat = 150.0
-    target_seconds: PositiveFloat = 55.0
+    #:
+    #: Measured, not assumed: across the first eight Kokoro-narrated scripts the
+    #: `af_heart` voice ran at 194-206 wpm on ordinary Reddit prose, and slower
+    #: (118-150) on acronym-dense board text where letters are spoken
+    #: individually. 185 tracks the target corpus while staying under the fast
+    #: cases, so parts come in at or below their planned length.
+    #:
+    #: Re-measure after changing voice or speed: this number is the only thing
+    #: connecting a planned part length to a real one.
+    words_per_minute: PositiveFloat = 185.0
+    target_seconds: PositiveFloat = 75.0
     min_seconds: PositiveFloat = 15.0
-    max_seconds: PositiveFloat = 170.0
+    #: A story longer than this is split. Also the ceiling for any single part.
+    max_seconds: PositiveFloat = 90.0
     #: A story needing more parts than this is rejected rather than split into
     #: a series nobody will finish watching.
-    max_parts: PositiveInt = 6
+    max_parts: PositiveInt = 10
     include_hook: bool = True
     include_outro: bool = True
     #: `{next_part}` and `{total_parts}` are substituted. Used on every part
@@ -391,6 +400,12 @@ class TTSConfig(StrictModel):
     #: Fail a synthesis whose measured duration exceeds this. Guards against a
     #: model looping on malformed input and producing a 20-minute clip.
     max_clip_seconds: PositiveFloat = 300.0
+    #: Longest utterance handed to the synthesiser in one call, in *spoken*
+    #: words. Kokoro truncates past 510 phonemes and then raises; measured
+    #: against the shipped voice, that begins at about 85 words. 70 leaves
+    #: margin for expansion-heavy text. A sentence longer than this is
+    #: subdivided at clause boundaries before synthesis.
+    max_words_per_chunk: PositiveInt = 70
 
 
 class CaptionConfig(StrictModel):
@@ -540,6 +555,13 @@ class ValidationConfig(StrictModel):
     require_expected_dimensions: bool = True
     #: Rendered duration must match the narration within this tolerance.
     duration_tolerance_seconds: PositiveFloat = 1.5
+    #: Also check each part against `script.max_seconds`. Planning works from an
+    #: estimated speaking rate, so a part can be planned within the limit and
+    #: narrate past it; without this the overrun is invisible until someone
+    #: watches the video.
+    enforce_script_part_limit: bool = True
+    #: Headroom over `script.max_seconds` before a part is called a failure.
+    part_limit_tolerance_seconds: PositiveFloat = 8.0
 
 
 class PublishTargetConfig(StrictModel):

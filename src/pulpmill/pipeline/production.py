@@ -320,6 +320,7 @@ class ProductionRunner:
                     config=app.config.validation,
                     render=app.config.render,
                     expected_duration=audio.duration_seconds if audio else None,
+                    max_part_seconds=app.config.script.max_seconds,
                 )
             except PulpmillError as exc:
                 self._record_failure(report, story, PipelineStage.VALIDATE, "validate", exc)

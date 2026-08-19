@@ -146,6 +146,18 @@ class PublicationRepository:
                 ),
             )
 
+    def replace_request(self, publication_id: str, request: Mapping[str, Any]) -> None:
+        """Record the metadata a video now carries, after an edit.
+
+        Kept accurate so the next relink can tell "already correct" from
+        "never updated" without asking the platform.
+        """
+        with self._db.transaction() as connection:
+            connection.execute(
+                "UPDATE publications SET request_json = ?, updated_at = ? WHERE id = ?",
+                (_dump(dict(request)), to_iso(self._clock.now()), publication_id),
+            )
+
     def get(self, video_id: str, target: str) -> PublicationRecord | None:
         row = self._db.query_one(
             "SELECT * FROM publications WHERE video_id = ? AND target = ?", (video_id, target)
@@ -172,6 +184,53 @@ class PublicationRepository:
             request=json.loads(row["request_json"]),
             response=json.loads(row["response_json"]),
         )
+
+    def published_siblings(
+        self, story_id: str, target: str, *, exclude_video_id: str | None = None
+    ) -> list[tuple[int, str]]:
+        """Other parts of the same story already live on this target.
+
+        Returns `(part_number, url)` in part order. Only real publications with
+        a URL count -- a dry run or a failed attempt has nothing to link to.
+
+        Joined against `story_scripts` because part numbering belongs to the
+        script, not to the publication: a publication row records what happened
+        on a platform, not where the video sits in a series.
+        """
+        rows = self._db.query_all(
+            "SELECT c.part_number AS part_number, p.remote_url AS remote_url "
+            "FROM publications p JOIN story_scripts c ON c.id = p.script_id "
+            "WHERE p.story_id = ? AND p.target = ? AND p.state = ? AND p.dry_run = 0 "
+            "AND p.remote_url IS NOT NULL AND p.video_id IS NOT ? "
+            "ORDER BY c.part_number ASC",
+            (story_id, target, PublishState.PUBLISHED.value, exclude_video_id),
+        )
+        return [(int(row["part_number"]), str(row["remote_url"])) for row in rows]
+
+    def published_parts_for_story(self, story_id: str, target: str) -> list[PublicationRecord]:
+        """Every live publication for a story on one target, in part order."""
+        rows = self._db.query_all(
+            "SELECT p.video_id AS video_id FROM publications p "
+            "JOIN story_scripts c ON c.id = p.script_id "
+            "WHERE p.story_id = ? AND p.target = ? AND p.state = ? AND p.dry_run = 0 "
+            "ORDER BY c.part_number ASC",
+            (story_id, target, PublishState.PUBLISHED.value),
+        )
+        records = [self.get(str(row["video_id"]), target) for row in rows]
+        return [record for record in records if record is not None]
+
+    def stories_with_multiple_parts(self, target: str) -> list[str]:
+        """Story ids with more than one live publication on this target.
+
+        The work list for `relink`: a story with one part has nothing to link.
+        """
+        rows = self._db.query_all(
+            "SELECT p.story_id AS story_id, count(*) AS parts FROM publications p "
+            "WHERE p.target = ? AND p.state = ? AND p.dry_run = 0 "
+            "GROUP BY p.story_id HAVING parts > 1 ORDER BY p.story_id",
+            (target, PublishState.PUBLISHED.value),
+        )
+        return [str(row["story_id"]) for row in rows]
 
     def published_today(self, target: str, *, hours: float = 24.0) -> int:
         """Real publications in the recent window, for the local daily cap.

@@ -184,13 +184,17 @@ script:
   provider: deterministic
   # Bump when script-building behaviour changes. Stored on every script.
   version: "2026.08.1"
-  # Keep close to the real rate of the configured voice, or parts drift long.
-  words_per_minute: 150.0
-  target_seconds: 55.0
+  # Measured against real Kokoro output, not assumed: af_heart runs at 194-206
+  # wpm on ordinary Reddit prose and slower on acronym-dense board text. 185
+  # tracks the target corpus while staying under the fast cases.
+  # Re-measure after changing voice or speed.
+  words_per_minute: 185.0
+  target_seconds: 75.0
   min_seconds: 15.0
-  # Under the three-minute ceiling shared by Shorts, Reels and TikTok.
-  max_seconds: 170.0
-  max_parts: 6
+  # A story longer than this is split into parts. Also the ceiling for any
+  # single part, and well under the three-minute platform limit.
+  max_seconds: 90.0
+  max_parts: 10
   include_hook: true
   include_outro: true
   outro_template: "Part {next_part} is up next."
@@ -223,6 +227,10 @@ tts:
   sentence_gap_seconds: 0.28
   paragraph_gap_seconds: 0.45
   max_clip_seconds: 300.0
+  # Longest utterance handed to the model in one call, in spoken words. Kokoro
+  # truncates past 510 phonemes and then raises -- measured, that starts at
+  # about 85 words. Longer sentences are subdivided at clause boundaries.
+  max_words_per_chunk: 70
 
 captions:
   enabled: true
@@ -299,6 +307,10 @@ validation:
   min_mean_volume_dbfs: -45.0
   require_expected_dimensions: true
   duration_tolerance_seconds: 1.5
+  # Planning works from an estimated speaking rate, so a part can be planned
+  # inside script.max_seconds and still narrate past it. This catches that.
+  enforce_script_part_limit: true
+  part_limit_tolerance_seconds: 8.0
 
 publishing:
   # Global interlock. While true, adapters validate and build the upload but

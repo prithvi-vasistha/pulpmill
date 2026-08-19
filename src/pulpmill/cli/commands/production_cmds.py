@@ -154,6 +154,7 @@ def register(app: typer.Typer) -> None:
             stories=app_ctx.stories,
             publications=app_ctx.publications,
             validations=app_ctx.validations,
+            scripts=app_ctx.scripts,
             clock=app_ctx.clock,
         )
 
@@ -201,6 +202,58 @@ def register(app: typer.Typer) -> None:
             )
 
     @app.command()
+    def relink(
+        ctx: typer.Context,
+        story: Annotated[
+            str | None, typer.Option("--story", help="Relink one story by id.")
+        ] = None,
+        targets_option: Annotated[
+            list[str] | None,
+            typer.Option("--target", "-t", help="Limit to these targets. Repeatable."),
+        ] = None,
+        live: Annotated[
+            bool, typer.Option("--live", help="Actually rewrite the descriptions.")
+        ] = False,
+    ) -> None:
+        """Backfill series cross-links into already-published descriptions.
+
+        Publishing is ordered, so part one goes up before part two exists and
+        cannot link forward at the time. Once a series is fully published, this
+        completes every part's index.
+
+        YouTube only. Instagram and TikTok publish captions immutably, so their
+        earlier parts keep pointing backwards -- reported, never silently
+        skipped. Dry run unless --live.
+        """
+        cli = get_context(ctx)
+        app_ctx = cli.app()
+        service = PublishingService(
+            config=app_ctx.config,
+            secrets=app_ctx.secrets,
+            stories=app_ctx.stories,
+            publications=app_ctx.publications,
+            validations=app_ctx.validations,
+            scripts=app_ctx.scripts,
+            clock=app_ctx.clock,
+        )
+        report = service.relink(target_names=targets_option, story_id=story, dry_run=not live)
+        ui.key_values(
+            {
+                "examined": f"{report.examined:,}",
+                "updated": f"{report.updated:,}",
+                "would update": f"{report.would_update:,}",
+                "already correct": f"{report.unchanged:,}",
+                "platform cannot edit": f"{report.unsupported:,}",
+                "failed": f"{report.failed:,}",
+            },
+            title="Relink" + (" (dry run)" if not live else ""),
+        )
+        for note in report.notes[:10]:
+            ui.warn(note)
+        if not live and report.would_update:
+            ui.console.print("[dim]dry run -- re-run with --live to apply.[/dim]")
+
+    @app.command()
     def targets(ctx: typer.Context) -> None:
         """Show configured publishing targets and whether each can publish."""
         cli = get_context(ctx)
@@ -211,6 +264,7 @@ def register(app: typer.Typer) -> None:
             stories=app_ctx.stories,
             publications=app_ctx.publications,
             validations=app_ctx.validations,
+            scripts=app_ctx.scripts,
             clock=app_ctx.clock,
         )
         table = Table(title="Publishing targets", title_justify="left", header_style="bold")

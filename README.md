@@ -104,6 +104,7 @@ Only commands that actually work are exposed.
 | `pulpmill validate` | Check rendered files against the publishability rules |
 | `pulpmill produce` | All four production stages in order |
 | `pulpmill publish` | Publish validated videos. Dry run unless `--live` |
+| `pulpmill relink` | Backfill series cross-links into published descriptions |
 | `pulpmill targets` | Publishing targets and what each one still needs |
 | `pulpmill assets` | ffmpeg, encoder, TTS and background-clip readiness |
 | `pulpmill sources` | List sources and whether each can currently fetch |

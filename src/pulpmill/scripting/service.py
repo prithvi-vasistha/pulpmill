@@ -42,6 +42,7 @@ from pulpmill.scripting.segmentation import (
     plan_segments,
     speech_durations,
     split_sentences,
+    subdivide_long_sentences,
 )
 from pulpmill.scripting.speech import to_speech_text
 
@@ -106,7 +107,9 @@ class ScriptBuilder:
         is a bug: both mean this story is not publishable as configured.
         """
         config = self._script_config
-        sentences, speech_texts = _speakable_sentences(story.normalized_content)
+        sentences, speech_texts = _speakable_sentences(
+            story.normalized_content, max_words_per_chunk=self._config.tts.max_words_per_chunk
+        )
         if not sentences:
             raise ScriptError("story has no narratable sentences", story_id=story.id)
 
@@ -329,17 +332,35 @@ class ScriptBuilder:
         )
 
 
-def _speakable_sentences(content: str) -> tuple[list[Sentence], list[str]]:
-    """Split into sentences, dropping any that produce no speakable text.
+def _spoken_word_count(text: str) -> int:
+    """Length of a fragment as the synthesiser will see it."""
+    return len(to_speech_text(text).split())
 
-    A sentence that is only punctuation, an emoji or a bare quote marker
-    survives text normalisation but has nothing to narrate. Dropping it here --
-    once, before anything is planned -- keeps sentence indices, durations and
-    script lines aligned with each other for the rest of the stage.
+
+def _speakable_sentences(
+    content: str, *, max_words_per_chunk: int
+) -> tuple[list[Sentence], list[str]]:
+    """Split into narratable sentences, paired with their spoken form.
+
+    Two things happen here, both before anything is planned, so that sentence
+    indices, durations and script lines stay aligned for the rest of the stage:
+
+    * **Over-long sentences are subdivided.** A run-on post exceeds the
+      synthesiser's token ceiling and cannot be split across parts, so it would
+      otherwise force a part past `max_seconds`.
+    * **Unspeakable sentences are dropped.** A sentence that is only
+      punctuation, an emoji or a bare quote marker survives text normalisation
+      but has nothing to narrate.
     """
+    split = subdivide_long_sentences(
+        split_sentences(content),
+        max_words=max_words_per_chunk,
+        measure=_spoken_word_count,
+    )
+
     sentences: list[Sentence] = []
     speech_texts: list[str] = []
-    for sentence in split_sentences(content):
+    for sentence in split:
         speech = to_speech_text(sentence.text)
         if not speech.strip():
             continue

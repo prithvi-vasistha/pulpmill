@@ -66,6 +66,7 @@ def validate_file(
     config: ValidationConfig,
     render: RenderConfig,
     expected_duration: float | None = None,
+    max_part_seconds: float | None = None,
 ) -> ValidationReport:
     """Measure a rendered file against the publishability rules.
 
@@ -86,6 +87,19 @@ def validate_file(
     checks.append(_duration_check(info, config))
     checks.append(_size_check(info, config))
     checks.extend(_frame_checks(info, config, render))
+
+    if max_part_seconds is not None and config.enforce_script_part_limit:
+        limit = max_part_seconds + config.part_limit_tolerance_seconds
+        checks.append(
+            Check(
+                name="within_script_part_limit",
+                passed=info.duration_seconds <= limit,
+                value=f"{info.duration_seconds:.2f}s",
+                expected=f"<= {max_part_seconds:g}s (+{config.part_limit_tolerance_seconds:g}s)",
+                detail="planning uses an estimated speaking rate; this catches the estimate "
+                "being wrong for this story",
+            )
+        )
 
     if expected_duration is not None:
         drift = abs(info.duration_seconds - expected_duration)

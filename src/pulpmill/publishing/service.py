@@ -39,8 +39,9 @@ from pulpmill.infrastructure.clock import SYSTEM_CLOCK, Clock
 from pulpmill.infrastructure.logging import get_logger
 from pulpmill.persistence.repositories.media import ValidationRepository
 from pulpmill.persistence.repositories.publications import PublicationRepository
+from pulpmill.persistence.repositories.scripts import ScriptRepository
 from pulpmill.persistence.repositories.stories import StoryRepository
-from pulpmill.publishing.base import PublisherContext, create_publisher
+from pulpmill.publishing.base import Publisher, PublisherContext, create_publisher
 from pulpmill.publishing.metadata import build_metadata
 
 _log = get_logger("publishing.service")
@@ -66,6 +67,30 @@ class PublishReport:
         }
 
 
+@dataclass(slots=True)
+class RelinkReport:
+    dry_run: bool
+    examined: int = 0
+    updated: int = 0
+    would_update: int = 0
+    unchanged: int = 0
+    #: Platforms whose captions cannot be edited after publishing.
+    unsupported: int = 0
+    failed: int = 0
+    notes: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "dry_run": self.dry_run,
+            "examined": self.examined,
+            "updated": self.updated,
+            "would_update": self.would_update,
+            "unchanged": self.unchanged,
+            "unsupported": self.unsupported,
+            "failed": self.failed,
+        }
+
+
 class PublishingService:
     """Publishes validated videos to the enabled targets."""
 
@@ -77,12 +102,14 @@ class PublishingService:
         stories: StoryRepository,
         publications: PublicationRepository,
         validations: ValidationRepository,
+        scripts: ScriptRepository | None = None,
         clock: Clock = SYSTEM_CLOCK,
         transport: object | None = None,
     ) -> None:
         self._config = config
         self._secrets = secrets
         self._stories = stories
+        self._scripts = scripts
         self._publications = publications
         self._validations = validations
         self._clock = clock
@@ -216,7 +243,12 @@ class PublishingService:
                     detail=f"local daily limit reached ({used}/{target.daily_limit})",
                 )
 
-        metadata = build_metadata(script, config=self._config, target=target)
+        # Whatever is already live for this story on this target, so a viewer
+        # arriving at part three can walk back to part one.
+        siblings = self._publications.published_siblings(
+            video.story_id, name, exclude_video_id=video.id
+        )
+        metadata = build_metadata(script, config=self._config, target=target, siblings=siblings)
         request = PublishRequest(
             video_path=video.path,
             metadata=metadata,
@@ -274,6 +306,114 @@ class PublishingService:
             response=dict(result.response),
         )
         return result
+
+    # --- relinking ------------------------------------------------------------
+
+    def relink(
+        self,
+        *,
+        target_names: list[str] | None = None,
+        story_id: str | None = None,
+        dry_run: bool = True,
+    ) -> RelinkReport:
+        """Backfill series cross-links into already-published descriptions.
+
+        Necessary because publishing is ordered: part one goes up before part
+        two exists, so its description cannot link forward at the time. Once the
+        whole series is live, every part's index can be completed.
+
+        Only where the platform allows it. Instagram and TikTok publish captions
+        immutably, so their earlier parts stay pointing backwards -- reported,
+        not silently skipped.
+        """
+        if self._scripts is None:  # pragma: no cover - wiring error
+            raise PublishError("relink needs the script repository")
+
+        report = RelinkReport(dry_run=dry_run)
+        for name, target in self.targets(target_names).items():
+            publisher = create_publisher(
+                PublisherContext(
+                    name=name,
+                    config=self._config,
+                    target=target,
+                    secrets=self._secrets,
+                    clock=self._clock,
+                    transport=self._transport,
+                )
+            )
+            try:
+                candidates = (
+                    [story_id] if story_id else self._publications.stories_with_multiple_parts(name)
+                )
+                for candidate in candidates:
+                    self._relink_story(candidate, name, target, publisher, report, dry_run)
+            finally:
+                publisher.close()
+        return report
+
+    def _relink_story(
+        self,
+        story_id: str,
+        target_name: str,
+        target: PublishTargetConfig,
+        publisher: Publisher,
+        report: RelinkReport,
+        dry_run: bool,
+    ) -> None:
+        assert self._scripts is not None  # narrowed by the caller
+        records = self._publications.published_parts_for_story(story_id, target_name)
+        if len(records) < 2:
+            return
+
+        story = self._stories.get(story_id)
+        if story is None:  # pragma: no cover - a deleted story with live videos
+            report.notes.append(f"{story_id[:8]}: story is gone; leaving its videos alone")
+            return
+
+        siblings = self._publications.published_siblings(story_id, target_name)
+
+        for record in records:
+            script = self._scripts.get(record.script_id, story.provenance)
+            if script is None or record.remote_id is None:
+                continue
+            metadata = build_metadata(script, config=self._config, target=target, siblings=siblings)
+            report.examined += 1
+
+            if metadata.description == record.request.get("description"):
+                report.unchanged += 1
+                continue
+            if dry_run:
+                report.would_update += 1
+                continue
+
+            try:
+                updated = publisher.update_metadata(record.remote_id, metadata)
+            except PublishError as exc:
+                report.failed += 1
+                _log.error(
+                    "relink_failed",
+                    target=target_name,
+                    story_id=story_id,
+                    remote_id=record.remote_id,
+                    error=str(exc),
+                )
+                continue
+
+            if not updated:
+                report.unsupported += 1
+                continue
+
+            report.updated += 1
+            self._publications.complete(
+                record.id,
+                state=PublishState.PUBLISHED,
+                remote_id=record.remote_id,
+                remote_url=record.remote_url,
+                response=dict(record.response),
+            )
+            self._publications.replace_request(
+                record.id, {**dict(record.request), "description": metadata.description}
+            )
 
     def _mark_published(self, story_id: str, *, job_id: str | None, targets: list[str]) -> None:
         try:

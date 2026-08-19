@@ -18,7 +18,7 @@ This module proposes *where* to cut. It never assigns part numbers -- that is
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from pulpmill.domain.errors import StoryTooLongError
@@ -160,6 +160,149 @@ def split_sentences(text: str) -> list[Sentence]:
             )
             first = False
     return sentences
+
+
+#: Clause boundaries, in the order they are preferred as cut points. A run-on
+#: post has no sentence punctuation to split on, but it almost always has
+#: commas and conjunctions -- and cutting there is far less audible than cutting
+#: mid-clause.
+_CLAUSE_BOUNDARY = re.compile(
+    r"(?<=[,;:])\s+|\s+(?=(?:and|but|so|because|then|however|although|while|which)\s)",
+    re.IGNORECASE,
+)
+
+
+def count_words(text: str) -> int:
+    """Default length measure: plain word count."""
+    return len(text.split())
+
+
+def subdivide_long_sentences(
+    sentences: list[Sentence],
+    *,
+    max_words: int,
+    measure: Callable[[str], int] = count_words,
+) -> list[Sentence]:
+    """Break sentences that are too long to narrate in one piece.
+
+    Two separate things make this necessary, and both are hard limits rather
+    than preferences:
+
+    * **The synthesiser has a token ceiling.** Kokoro truncates past 510
+      phonemes and then raises. Measured against the shipped voice, ~85 words is
+      where that begins, so anything above it fails outright rather than
+      narrating badly.
+    * **A sentence is the atom part planning works with.** A 285-word run-on
+      cannot be split across parts, so it forces a part longer than
+      `max_seconds` no matter what the planner does.
+
+    Real 4chan and low-effort Reddit posts are frequently written as one
+    unpunctuated paragraph, so this is a normal input, not an edge case.
+
+    Cuts prefer clause boundaries and fall back to word boundaries. Offsets stay
+    correct, so a part still resolves to the exact source text it came from.
+
+    `measure` is how a piece's length is counted. The caller passes one that
+    measures the *spoken* form, because that is what the synthesiser sees --
+    "AITA" is one word on the page and four in the narration, so measuring the
+    page would let a piece through that the model then refuses.
+    """
+    if max_words < 1:
+        raise ValueError("max_words must be at least 1")
+
+    result: list[Sentence] = []
+    for sentence in sentences:
+        if measure(sentence.text) <= max_words:
+            result.append(sentence)
+            continue
+        result.extend(_split_sentence(sentence, max_words=max_words, measure=measure))
+    return result
+
+
+def _split_sentence(
+    sentence: Sentence, *, max_words: int, measure: Callable[[str], int]
+) -> list[Sentence]:
+    """Cut one over-long sentence into chunks that each fit the limit."""
+    fragments = _clause_fragments(sentence.text)
+
+    chunks: list[tuple[int, int]] = []
+    start = 0
+    words = 0
+    for frag_start, frag_end in fragments:
+        frag_words = measure(sentence.text[frag_start:frag_end])
+        if words and words + frag_words > max_words:
+            chunks.append((start, frag_start))
+            start = frag_start
+            words = 0
+        words += frag_words
+    chunks.append((start, len(sentence.text)))
+
+    pieces: list[Sentence] = []
+    for index, (chunk_start, chunk_end) in enumerate(chunks):
+        text = sentence.text[chunk_start:chunk_end].strip()
+        if not text:
+            continue
+        # A single clause can still exceed the limit; fall back to words.
+        for offset, hard in _hard_split(text, max_words=max_words, measure=measure):
+            pieces.append(
+                Sentence(
+                    text=hard,
+                    start=sentence.start + chunk_start + offset,
+                    end=min(sentence.start + chunk_start + offset + len(hard), sentence.end),
+                    # Only the first piece inherits the paragraph break; the
+                    # rest are continuations of the same thought.
+                    paragraph_break=sentence.paragraph_break and index == 0 and offset == 0,
+                )
+            )
+    return pieces or [sentence]
+
+
+def _clause_fragments(text: str) -> list[tuple[int, int]]:
+    """Spans between clause boundaries, covering the whole string."""
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for match in _CLAUSE_BOUNDARY.finditer(text):
+        if match.start() > cursor:
+            spans.append((cursor, match.start()))
+            cursor = match.end()
+    spans.append((cursor, len(text)))
+    return [(start, end) for start, end in spans if end > start]
+
+
+def _hard_split(
+    text: str, *, max_words: int, measure: Callable[[str], int]
+) -> list[tuple[int, str]]:
+    """Last-resort split at word boundaries, with offsets into `text`.
+
+    Steps in written words but checks the measured length, so an expansion-heavy
+    fragment produces more, smaller pieces rather than one that still overruns.
+    """
+    if measure(text) <= max_words:
+        return [(0, text)]
+
+    words = text.split()
+    pieces: list[tuple[int, str]] = []
+    cursor = 0
+    current: list[str] = []
+    chunk_start = 0
+
+    for word in words:
+        position = text.find(word, cursor)
+        offset = position if position >= 0 else cursor
+        if not current:
+            chunk_start = offset
+        candidate = [*current, word]
+        if current and measure(" ".join(candidate)) > max_words:
+            pieces.append((chunk_start, " ".join(current)))
+            current = [word]
+            chunk_start = offset
+        else:
+            current = candidate
+        cursor = offset + len(word)
+
+    if current:
+        pieces.append((chunk_start, " ".join(current)))
+    return pieces
 
 
 def speech_durations(texts: Sequence[str], *, words_per_minute: float) -> list[float]:

@@ -33,6 +33,7 @@ from pulpmill.domain.publishing import (
     PublishRequest,
     PublishResult,
     PublishState,
+    VideoMetadata,
 )
 from pulpmill.infrastructure.clock import utc_now
 from pulpmill.infrastructure.http import HttpClient
@@ -43,6 +44,11 @@ PLATFORM = "youtube"
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
+VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+
+#: Quota cost of one `videos.update`. Cheap next to the 1600 an upload spends,
+#: which is what makes relinking a back catalogue affordable.
+UPDATE_QUOTA_COST = 50
 
 #: Quota cost of one `videos.insert`, against a default 10 000/day allowance.
 UPLOAD_QUOTA_COST = 1600
@@ -275,6 +281,40 @@ class YouTubePublisher:
         self._token_expires_at = now + float(payload.get("expires_in", 3600)) - 60
         _log.info("youtube_token_acquired", target=self.name)
         return self._access_token
+
+    def update_metadata(self, remote_id: str, metadata: VideoMetadata) -> bool:
+        """Rewrite a published video's snippet.
+
+        `videos.update` costs 50 quota units against the same daily allowance an
+        upload spends 1600 of, so relinking a back catalogue is cheap next to
+        publishing it. The whole snippet must be sent -- the API replaces rather
+        than merges -- which is why the category id is resent unchanged.
+        """
+        health = self.health()
+        if not health.available:
+            raise PublisherUnavailableError(
+                health.detail, target=self.name, remediation=health.remediation
+            )
+
+        body = {
+            "id": remote_id,
+            "snippet": {
+                "title": metadata.title,
+                "description": metadata.description,
+                "tags": list(metadata.tags),
+                "categoryId": str(self._target.options.get("category_id", "24")),
+            },
+        }
+        self._http().request(
+            "PUT",
+            VIDEOS_URL,
+            params={"part": "snippet"},
+            headers={"Authorization": f"Bearer {self._token()}"},
+            json_body=body,
+            expected_status=(200,),
+        )
+        _log.info("youtube_metadata_updated", target=self.name, remote_id=remote_id)
+        return True
 
     def _http(self) -> HttpClient:
         if self._client is None:

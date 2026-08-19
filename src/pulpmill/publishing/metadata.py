@@ -10,6 +10,8 @@ Nothing here is platform-specific. Adapters apply their own limits by calling
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pulpmill.config.models import AppConfig, PublishTargetConfig
 from pulpmill.domain.publishing import VideoMetadata, build_tags
 from pulpmill.domain.script import NarrationScript
@@ -24,10 +26,16 @@ def build_metadata(
     *,
     config: AppConfig,
     target: PublishTargetConfig,
+    siblings: Sequence[tuple[int, str]] = (),
 ) -> VideoMetadata:
-    """Compose the metadata for one video on one target."""
+    """Compose the metadata for one video on one target.
+
+    `siblings` are the other parts of this story already live on this target, as
+    `(part_number, url)`. They are linked from the description so a viewer who
+    arrives at part three can walk back to part one.
+    """
     title = _title(script, target)
-    description = _description(script, config=config, target=target)
+    description = _description(script, config=config, target=target, siblings=siblings)
     return VideoMetadata(
         title=title,
         description=description,
@@ -59,12 +67,39 @@ def _title(script: NarrationScript, target: PublishTargetConfig) -> str:
     return base
 
 
-def _description(script: NarrationScript, *, config: AppConfig, target: PublishTargetConfig) -> str:
+def _series_links(script: NarrationScript, siblings: Sequence[tuple[int, str]]) -> str:
+    """A linked index of the other parts, or empty when there are none yet.
+
+    Ordering is unavoidable: part one cannot link part two before part two
+    exists. Each part therefore links whatever was already live when it went up,
+    and `pulpmill relink` fills in the rest afterwards on platforms that allow a
+    description to be edited.
+    """
+    seen: dict[int, str] = {}
+    for part_number, url in siblings:
+        if part_number != script.part_number and url:
+            seen.setdefault(part_number, url)
+    if not seen:
+        return ""
+    entries = [f"Part {number}: {seen[number]}" for number in sorted(seen)]
+    return "\n".join(["Watch the full story:", *entries])
+
+
+def _description(
+    script: NarrationScript,
+    *,
+    config: AppConfig,
+    target: PublishTargetConfig,
+    siblings: Sequence[tuple[int, str]] = (),
+) -> str:
     community = str(script.metadata.get("community") or script.provenance.source_platform)
     lines = [script.title.strip()]
 
     if script.is_series:
         lines.append(f"Part {script.part_number} of {script.total_parts}.")
+        links = _series_links(script, siblings)
+        if links:
+            lines.append(links)
 
     if script.provenance.source_platform in _ANONYMOUS_PLATFORMS:
         lines.append(f"Posted anonymously to /{community}/.")
