@@ -10,7 +10,6 @@ Never fails, never needs a key, never needs a network.
 
 from __future__ import annotations
 
-from pulpmill.scripting.hooks import tidy_title
 from pulpmill.scripting.provider import ScriptBrief, ScriptGuidance
 
 PROVIDER_NAME = "deterministic"
@@ -24,8 +23,16 @@ class DeterministicScriptProvider:
     def available(self) -> tuple[bool, str]:
         return True, "always available (no model, no network)"
 
-    def guide(self, brief: ScriptBrief) -> ScriptGuidance:
-        return ScriptGuidance(
-            title=tidy_title(brief.title) or None,
-            notes="even duration split, snapped to paragraph breaks",
-        )
+    def guide(self, brief: ScriptBrief) -> ScriptGuidance:  # noqa: ARG002
+        """Offers no title of its own.
+
+        Returning a tidied title here looked harmless and was not: `tidy_title`
+        shortens to title-card width, and the service treats a provider's title
+        as the source for *both* the card and the spoken hook. The hook then
+        lost its last few words -- which, on a question-shaped title, are the
+        entire point of the question.
+
+        A provider's job is to propose an *alternative*. This one has none, so
+        it says so and lets the service tidy the original for each use.
+        """
+        return ScriptGuidance(notes="even duration split, snapped to paragraph breaks")

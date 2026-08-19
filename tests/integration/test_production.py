@@ -12,6 +12,8 @@ in order to be exercised honestly.
 from __future__ import annotations
 
 import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -210,7 +212,57 @@ class TestRenderAndValidate:
         assert video is not None
         assert video.exists()
         assert (video.width, video.height) == (app.config.render.width, app.config.render.height)
+        # No clips in the (isolated, empty) library, so `auto` generates one.
         assert video.background_source == "procedural"
+
+    def test_a_library_clip_is_used_when_one_exists(
+        self, app: Application, selected_story, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """`auto` switches to real footage the moment it appears.
+
+        This is what makes "no gameplay footage yet" a working state rather than
+        a broken one: nothing is configured, the clip is simply there.
+        """
+        library = app.config.background_library_dir
+        library.mkdir(parents=True, exist_ok=True)
+        clip = library / "clip.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=640x360:rate=15:duration=30",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "40",
+                "-pix_fmt",
+                "yuv420p",
+                str(clip),
+            ],
+            check=True,
+            timeout=120,
+        )
+
+        runner = ProductionRunner(app)
+        runner.script()
+        runner.narrate(provider="mock")
+        assert runner.render().completed == 1
+
+        script = app.scripts.for_story(selected_story.id, selected_story.provenance)[0]
+        video = app.videos.for_script(script.id, selected_story.provenance)
+        assert video is not None
+        assert video.background_source == "clip.mp4"
+        # A 30s clip behind a longer narration has to loop to fill the frame.
+        assert video.metadata["background_looped"] is True
+        assert (video.width, video.height) == (1080, 1920)
 
     def test_silent_audio_is_refused_by_validation(self, app: Application, selected_story) -> None:  # type: ignore[no-untyped-def]
         """The mock provider writes silence, so this must not pass.

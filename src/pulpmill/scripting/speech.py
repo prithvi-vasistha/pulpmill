@@ -169,7 +169,19 @@ _CASE_SENSITIVE = frozenset({"so", "dh", "dw", "ex", "pm", "dm", "op"})
 _AGE_GENDER = re.compile(r"\(?\b(\d{1,2})\s*([MmFf])\b\)?")
 _GENDER_AGE = re.compile(r"\(?\b([MmFf])\s*(\d{1,2})\b\)?")
 _TIME_MERIDIEM = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([AaPp])\.?[Mm]\.?\b")
-_HEIGHT = re.compile(r"\b(\d)\s*(?:'|ft\.?|feet)\s*(\d{1,2})?\s*(?:\"|in\.?|inches)?")
+#: Feet and inches in the quote form only, ASCII or typographic -- mobile
+#: keyboards autocorrect both marks on the way in, so the curly forms are at
+#: least as common in this corpus. Both numbers are required, which keeps
+#: this away from decade apostrophes and from a plain "six feet apart",
+#: where the reading is a distance rather than a height.
+#:
+#: The spelled-out forms are left alone on purpose: "5 feet 4 inches"
+#: already narrates correctly once the digits are spelled, so a rule for it
+#: could only introduce mistakes.
+_HEIGHT = re.compile(r"\b(\d)\s*['\u2019\u2032]\s*(\d{1,2})\s*[\"\u201d\u2033]?")
+#: The abbreviated spelling, which also needs both numbers to be safe. "ft"
+#: written out is unambiguous enough here; "feet" is not, so it stays untouched.
+_HEIGHT_FT = re.compile(r"\b(\d)\s*ft\b\.?\s*(\d{1,2})\b", re.IGNORECASE)
 #: The magnitude suffix and the space before it are optional *together*, so
 #: "$1 and" does not lose the space and become "one dollarand".
 _MONEY = re.compile(r"([$€£])\s?(\d[\d,]*(?:\.\d+)?)(?:\s*([kKmM]))?\b")
@@ -242,10 +254,7 @@ def _expand_time(match: re.Match[str]) -> str:
 
 def _expand_height(match: re.Match[str]) -> str:
     feet, inches = match.group(1), match.group(2)
-    spoken = f"{spell_integer(int(feet))} foot"
-    if inches:
-        spoken += f" {spell_integer(int(inches))}"
-    return spoken
+    return f"{spell_integer(int(feet))} foot {spell_integer(int(inches))}"
 
 
 def _expand_age_gender(age: str, gender: str) -> str:
@@ -300,6 +309,7 @@ def to_speech_text(text: str) -> str:
     working = _PERCENT.sub(lambda m: f"{spell_decimal(m.group(1))} percent", working)
     working = _TIME_MERIDIEM.sub(_expand_time, working)
     working = _HEIGHT.sub(_expand_height, working)
+    working = _HEIGHT_FT.sub(_expand_height, working)
     working = _AGE_GENDER.sub(lambda m: _expand_age_gender(m.group(1), m.group(2)), working)
     working = _GENDER_AGE.sub(lambda m: _expand_age_gender(m.group(2), m.group(1)), working)
     working = _ORDINAL.sub(lambda m: spell_ordinal(int(m.group(1))), working)

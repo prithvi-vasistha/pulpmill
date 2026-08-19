@@ -52,8 +52,21 @@ def config(project_root: Path, tmp_path: Path) -> AppConfig:
     """
     loaded = load_config(project_root=project_root, environ={}, load_dotenv=False)
     runtime = loaded.runtime
+    render = loaded.render
     return loaded.model_copy(
         update={
+            # The background library is a *read* path, but an environment-
+            # dependent one: whether the checkout happens to contain gameplay
+            # footage must not change what a test renders. Point it at an empty
+            # temporary directory so every test starts from the same place, and
+            # let a test that cares about the library put clips there itself.
+            "render": render.model_copy(
+                update={
+                    "background": render.background.model_copy(
+                        update={"library_dir": str(tmp_path / "backgrounds")}
+                    )
+                }
+            ),
             "runtime": runtime.model_copy(
                 update={
                     "data_dir": str(tmp_path),
@@ -71,7 +84,7 @@ def config(project_root: Path, tmp_path: Path) -> AppConfig:
                         }
                     ),
                 }
-            )
+            ),
         }
     )
 

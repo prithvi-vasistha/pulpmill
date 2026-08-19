@@ -142,14 +142,22 @@ class ScriptBuilder:
                 parts=len(parts),
             )
 
-        title = tidy_title(guidance.title or story.title)
+        # Two different limits, deliberately. The title card has to fit on
+        # screen; the hook is narrated, not drawn, so it keeps the full title.
+        # Building the hook from the card text truncated it mid-phrase and
+        # dropped the last few words, which are usually the interesting ones.
+        source_title = guidance.title or story.title
+        card_title = tidy_title(source_title)
+        spoken_title = tidy_title(source_title, max_chars=len(source_title) + 1)
+
         scripts = tuple(
             self._build_part_script(
                 story,
                 sentences=sentences[start:stop],
                 speech_texts=speech_texts[start:stop],
                 part=parts[index],
-                title=title,
+                title=card_title,
+                spoken_title=spoken_title,
                 hook_override=guidance.hook if index == 0 else None,
                 estimated_seconds=plan.estimated_seconds[index],
                 generator=effective_provider,
@@ -261,6 +269,7 @@ class ScriptBuilder:
         speech_texts: Sequence[str],
         part: StoryPart,
         title: str,
+        spoken_title: str,
         hook_override: str | None,
         estimated_seconds: float,
         generator: str,
@@ -270,7 +279,7 @@ class ScriptBuilder:
 
         if config.include_hook:
             hook_text = hook_override or build_hook(
-                title=title,
+                title=spoken_title,
                 first_sentence=sentences[0].text if sentences else "",
                 part_number=part.part_number,
                 total_parts=part.total_parts,
